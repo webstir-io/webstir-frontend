@@ -44,7 +44,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/electric/webstir"
+    "url": "https://github.com/webstir-io/webstir-frontend"
   },
   "keywords": [
     "webstir",
