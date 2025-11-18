@@ -2,6 +2,11 @@
 
 Frontend build and publish toolkit for Webstir workspaces. The package bundles the HTML/CSS/JS pipeline, scaffolding helpers, and module provider used by the Webstir CLI and installers.
 
+## Status
+
+- Experimental provider for the Webstir ecosystem — pipeline details and configuration surfaces may change between releases.
+- Best suited for exploration and demos today; do not rely on it as a hardened production frontend pipeline yet.
+
 ## Quick Start
 
 1. **Authenticate to GitHub Packages**
@@ -105,8 +110,8 @@ const result = await frontendProvider.build({
   env: { WEBSTIR_MODULE_MODE: 'publish' }
 });
 
-console.log(result.manifest.entryPoints);
-```
+   console.log(result.manifest.entryPoints);
+   ```
 
 - `frontendProvider.metadata` surfaces id/version compatibility.
 - `frontendProvider.resolveWorkspace` returns canonical source/build/test paths.
@@ -132,6 +137,13 @@ CI notes
 - **“Authentication required for npm.pkg.github.com”** — ensure the configured token has `read:packages`.
 - **“No frontend test files found”** — the `test` script expects files under `tests/**/*.test.js` after build.
 - **Missing entry points in manifest** — confirm `build/frontend` contains at least one `.js`/`.mjs` bundle; the provider falls back to `build/app/index.js` and emits a warning if empty.
+
+## Community & Support
+
+- Code of Conduct: https://github.com/webstir-io/.github/blob/main/CODE_OF_CONDUCT.md
+- Contributing guidelines: https://github.com/webstir-io/.github/blob/main/CONTRIBUTING.md
+- Security policy and disclosure process: https://github.com/webstir-io/.github/blob/main/SECURITY.md
+- Support expectations and contact channels: https://github.com/webstir-io/.github/blob/main/SUPPORT.md
 
 ## License
 
