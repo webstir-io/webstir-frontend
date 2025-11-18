@@ -145,6 +145,10 @@ CI notes
 - Security policy and disclosure process: https://github.com/webstir-io/.github/blob/main/SECURITY.md
 - Support expectations and contact channels: https://github.com/webstir-io/.github/blob/main/SUPPORT.md
 
+## Third-Party Notices
+
+Webstir Frontend depends on third-party libraries and data sets (including `sharp`/libvips and `caniuse-lite`) under their respective licenses. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for a summary of notable licenses and attribution.
+
 ## License
 
 MIT © Webstir
