@@ -29,9 +29,13 @@ program
     .command('publish')
     .description('Build production assets into the dist directory')
     .requiredOption('-w, --workspace <path>', 'Absolute path to the workspace root')
+    .option('-m, --mode <mode>', 'Publish mode: bundle or ssg', 'bundle')
     .action(async (cmd) => {
         try {
-            await runPublish({ workspaceRoot: cmd.workspace });
+            await runPublish({
+                workspaceRoot: cmd.workspace,
+                publishMode: cmd.mode === 'ssg' ? 'ssg' : 'bundle'
+            });
         } catch (error) {
             handleError(error);
         }
@@ -57,11 +61,13 @@ program
     .command('add-page <name>')
     .description('Scaffold a new frontend page (HTML/CSS/TS)')
     .requiredOption('-w, --workspace <path>', 'Absolute path to the workspace root')
+    .option('-m, --mode <mode>', 'Page mode: standard or ssg', 'standard')
     .action(async (name, cmd) => {
         try {
             await runAddPage({
                 workspaceRoot: cmd.workspace,
-                pageName: name
+                pageName: name,
+                ssg: cmd.mode === 'ssg'
             });
         } catch (error) {
             handleError(error);

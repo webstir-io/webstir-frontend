@@ -7,6 +7,7 @@ export const frontendPathSchema = z.object({
         frontend: z.string(),
         app: z.string(),
         pages: z.string(),
+        content: z.string(),
         images: z.string(),
         fonts: z.string(),
         media: z.string()
@@ -16,6 +17,7 @@ export const frontendPathSchema = z.object({
         frontend: z.string(),
         app: z.string(),
         pages: z.string(),
+        content: z.string(),
         images: z.string(),
         fonts: z.string(),
         media: z.string()
@@ -25,6 +27,7 @@ export const frontendPathSchema = z.object({
         frontend: z.string(),
         app: z.string(),
         pages: z.string(),
+        content: z.string(),
         images: z.string(),
         fonts: z.string(),
         media: z.string()

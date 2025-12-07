@@ -1,7 +1,10 @@
+export type FrontendPublishMode = 'bundle' | 'ssg';
+
 export interface FrontendCommandOptions {
     readonly workspaceRoot: string;
     readonly changedFile?: string;
     readonly watch?: boolean;
+    readonly publishMode?: FrontendPublishMode;
 }
 
 export interface FrontendConfig {
@@ -17,6 +20,7 @@ export interface FrontendPathConfig {
         readonly frontend: string;
         readonly app: string;
         readonly pages: string;
+        readonly content: string;
         readonly images: string;
         readonly fonts: string;
         readonly media: string;
@@ -26,6 +30,7 @@ export interface FrontendPathConfig {
         readonly frontend: string;
         readonly app: string;
         readonly pages: string;
+        readonly content: string;
         readonly images: string;
         readonly fonts: string;
         readonly media: string;
@@ -35,6 +40,7 @@ export interface FrontendPathConfig {
         readonly frontend: string;
         readonly app: string;
         readonly pages: string;
+        readonly content: string;
         readonly images: string;
         readonly fonts: string;
         readonly media: string;
@@ -49,4 +55,5 @@ export interface FrontendFeatureFlags {
 
 export interface AddPageCommandOptions extends FrontendCommandOptions {
     readonly pageName: string;
+    readonly ssg?: boolean;
 }

@@ -58,7 +58,7 @@ Binary name: `webstir-frontend`. All commands require `--workspace` pointing to 
 | Command | Description | Useful options |
 |---------|-------------|----------------|
 | `build` | Runs the development pipeline (incremental safe). | `--changed-file <path>` to scope rebuilds. |
-| `publish` | Produces optimized assets under `dist/frontend`. | — |
+| `publish` | Produces optimized assets under `dist/frontend`. | `--mode <bundle\|ssg>` (SSG preview). |
 | `rebuild` | Incremental rebuild triggered by a file change. | `--changed-file <path>` to pass the changed file. |
 | `add-page <name>` | Scaffolds a page (HTML/CSS/TS) inside `src/frontend/pages`. | — |
 | `watch-daemon` | Persistent watcher + HMR coordinator. | `--no-auto-start`, `--verbose`, `--hmr-verbose`. |
@@ -116,6 +116,20 @@ const result = await frontendProvider.build({
 - `frontendProvider.metadata` surfaces id/version compatibility.
 - `frontendProvider.resolveWorkspace` returns canonical source/build/test paths.
 - `frontendProvider.build` executes the pipeline and returns artifacts + manifest.
+
+## SSG Preview
+
+When invoked as:
+
+```bash
+npx webstir-frontend publish --workspace /absolute/path/to/workspace --mode ssg
+```
+
+the provider:
+
+- Runs the normal publish pipeline to populate `dist/frontend/**`.
+- Creates static-friendly `index.html` aliases (root and per-page).
+- When `package.json` includes `webstir.module.views` with `renderMode: 'ssg'` and `staticPaths`, uses those paths to add additional `index.html` aliases under `dist/frontend/**`.
 
 ## Maintainer Workflow
 
