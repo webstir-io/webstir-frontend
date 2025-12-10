@@ -35,6 +35,7 @@ async function bundleJavaScript(context: BuilderContext, isProduction: boolean):
     }
     const targetPage = findPageFromChangedFile(context.changedFile, config.paths.src.pages);
     const pages = await getPages(config.paths.src.pages);
+    let builtAny = false;
 
     for (const page of pages) {
         if (targetPage && page.name !== targetPage) {
@@ -45,6 +46,8 @@ async function bundleJavaScript(context: BuilderContext, isProduction: boolean):
             continue;
         }
 
+        builtAny = true;
+
         if (isProduction) {
             await buildForProduction(config, page.name, entryPoint);
         } else {
@@ -52,7 +55,9 @@ async function bundleJavaScript(context: BuilderContext, isProduction: boolean):
         }
     }
 
-    await copyRefreshScript(config);
+    if (builtAny || context.enable?.seamlessNav) {
+        await copyRuntimeScripts(config, context.enable, isProduction);
+    }
 }
 
 async function buildForDevelopment(config: BuilderContext['config'], pageName: string, entryPoint: string): Promise<void> {
@@ -112,18 +117,36 @@ async function buildForProduction(config: BuilderContext['config'], pageName: st
     });
 }
 
-async function copyRefreshScript(config: BuilderContext['config']): Promise<void> {
-    const runtimeScripts = [FILES.refreshJs, FILES.hmrJs];
+async function copyRuntimeScripts(
+    config: BuilderContext['config'],
+    enable: BuilderContext['enable'],
+    isProduction: boolean
+): Promise<void> {
+    const scripts = [
+        { name: FILES.refreshJs, copyToDist: false, required: !isProduction },
+        { name: FILES.hmrJs, copyToDist: false, required: !isProduction },
+        { name: 'seamlessNav.js', copyToDist: true, required: enable?.seamlessNav === true }
+    ];
 
-    for (const scriptName of runtimeScripts) {
-        const source = path.join(config.paths.src.app, scriptName);
+    for (const script of scripts) {
+        if (!script.required) {
+            continue;
+        }
+
+        const source = path.join(config.paths.src.app, script.name);
         if (!(await pathExists(source))) {
             continue;
         }
 
-        const destination = path.join(config.paths.build.frontend, scriptName);
-        await ensureDir(path.dirname(destination));
-        await copy(source, destination);
+        const buildDestination = path.join(config.paths.build.frontend, script.name);
+        await ensureDir(path.dirname(buildDestination));
+        await copy(source, buildDestination);
+
+        if (isProduction && script.copyToDist) {
+            const distDestination = path.join(config.paths.dist.frontend, script.name);
+            await ensureDir(path.dirname(distDestination));
+            await copy(source, distDestination);
+        }
     }
 }
 

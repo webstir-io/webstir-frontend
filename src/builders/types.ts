@@ -1,8 +1,9 @@
-import type { FrontendConfig } from '../types.js';
+import type { EnableFlags, FrontendConfig } from '../types.js';
 
 export interface BuilderContext {
     readonly config: FrontendConfig;
     readonly changedFile?: string;
+    readonly enable?: EnableFlags;
 }
 
 export interface Builder {

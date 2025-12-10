@@ -13,6 +13,12 @@ export interface FrontendConfig {
     readonly features: FrontendFeatureFlags;
 }
 
+export interface EnableFlags {
+    readonly spa?: boolean;
+    readonly seamlessNav?: boolean;
+    readonly backend?: boolean;
+}
+
 export interface FrontendPathConfig {
     readonly workspace: string;
     readonly src: {

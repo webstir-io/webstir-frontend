@@ -7,7 +7,7 @@ import { getPages, type PageInfo } from '../core/pages.js';
 import { emitDiagnostic } from '../core/diagnostics.js';
 import type { FrontendConfig } from '../types.js';
 import { prepareWorkspaceConfig } from '../config/setup.js';
-import { ensureDir } from '../utils/fs.js';
+import { ensureDir, readJson } from '../utils/fs.js';
 import { shouldProcess, isPathInside } from '../utils/changedFile.js';
 import { findPageFromChangedFile } from '../utils/pathMatch.js';
 import { createCssBuilder } from '../builders/cssBuilder.js';
@@ -36,6 +36,17 @@ interface PageBuildContext {
 
 const JAVASCRIPT_EXTENSIONS = [EXTENSIONS.ts, EXTENSIONS.js, '.tsx', '.jsx'] as const;
 
+interface WorkspacePackageJson {
+    readonly webstir?: {
+        readonly mode?: string;
+        readonly module?: {
+            readonly views?: ReadonlyArray<{
+                readonly renderMode?: string;
+            }>;
+        };
+    };
+}
+
 export class WatchCoordinator {
     private readonly workspaceRoot: string;
     private readonly jsContexts = new Map<string, PageBuildContext>();
@@ -45,6 +56,7 @@ export class WatchCoordinator {
     private readonly hotUpdateTracker: HotUpdateTracker;
     private readonly hmrTotals = { hotUpdates: 0, reloadFallbacks: 0 };
     private config?: FrontendConfig;
+    private isSsgWorkspace = false;
     private isStopping = false;
     private queue: Promise<void> = Promise.resolve();
 
@@ -70,6 +82,7 @@ export class WatchCoordinator {
         });
 
         this.config = await prepareWorkspaceConfig(this.workspaceRoot);
+        this.isSsgWorkspace = await this.detectSsgWorkspace(this.workspaceRoot);
         await this.refreshJavaScriptContexts();
         const pipelineReady = await this.runFullBuildCycle();
 
@@ -195,13 +208,23 @@ export class WatchCoordinator {
     private async ensureJavaScriptContext(config: FrontendConfig, page: PageInfo): Promise<void> {
         const entryPoint = await resolveEntryPoint(page.directory);
         if (!entryPoint) {
-            emitDiagnostic({
-                code: 'frontend.watch.javascript.entry.missing',
-                kind: 'watch-daemon',
-                stage: 'javascript',
-                severity: 'warning',
-                message: `No JavaScript entry point found for page '${page.name}'.`
-            });
+            if (!this.isSsgWorkspace) {
+                emitDiagnostic({
+                    code: 'frontend.watch.javascript.entry.missing',
+                    kind: 'watch-daemon',
+                    stage: 'javascript',
+                    severity: 'warning',
+                    message: `No JavaScript entry point found for page '${page.name}'.`
+                });
+            } else if (this.verbose) {
+                emitDiagnostic({
+                    code: 'frontend.watch.javascript.entry.missing',
+                    kind: 'watch-daemon',
+                    stage: 'javascript',
+                    severity: 'info',
+                    message: `No JavaScript entry point found for page '${page.name}' (ssg workspace).`
+                });
+            }
             if (this.jsContexts.has(page.name)) {
                 const existing = this.jsContexts.get(page.name);
                 if (existing) {
@@ -479,6 +502,22 @@ export class WatchCoordinator {
             requiresReload,
             fallbackReasons: this.combineFallbackReasons([], fallbackReasons)
         };
+    }
+
+    private async detectSsgWorkspace(workspaceRoot: string): Promise<boolean> {
+        const pkgPath = path.join(workspaceRoot, FILES.packageJson);
+        const pkg = await readJson<WorkspacePackageJson>(pkgPath);
+        if (!pkg?.webstir) {
+            return false;
+        }
+
+        const stringMode = pkg.webstir.mode;
+        if (typeof stringMode === 'string' && stringMode.toLowerCase() === 'ssg') {
+            return true;
+        }
+
+        const views = pkg.webstir.module?.views;
+        return Array.isArray(views) && views.some(view => view.renderMode?.toLowerCase() === 'ssg');
     }
 
     private resolveTargetPages(changedFile?: string): string[] {

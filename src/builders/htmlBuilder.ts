@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { load } from 'cheerio';
 import type { Cheerio, CheerioAPI } from 'cheerio';
@@ -18,6 +19,8 @@ import { injectResourceHints } from '../html/resourceHints.js';
 import { inlineCriticalCss } from '../html/criticalCss.js';
 import { findPageFromChangedFile } from '../utils/pathMatch.js';
 import { emitDiagnostic } from '../core/diagnostics.js';
+import type { EnableFlags } from '../types.js';
+import { relativePathWithin } from '../utils/pathMatch.js';
 
 export function createHtmlBuilder(context: BuilderContext): Builder {
     return {
@@ -75,8 +78,9 @@ async function buildHtml(context: BuilderContext): Promise<void> {
             validatePageFragment(fragment, sourceHtmlPath);
 
             const mergedHtml = mergeTemplates(templateHtml, fragment);
+            const mergedWithScripts = injectOptInScripts(mergedHtml, context.enable, page.directory, sourceHtmlPath);
             const targetPath = path.join(targetDir, path.basename(relativeHtml));
-            await writeFile(targetPath, mergedHtml);
+            await writeFile(targetPath, mergedWithScripts);
         }
     }
 
@@ -142,10 +146,60 @@ function mergeTemplates(appHtml: string, pageHtml: string): string {
         throw new Error('Templates must include a <head> element.');
     }
 
+    const appBody = app('body').first();
+    const pageBody = page('body').first();
+    if (appBody.length && pageBody.length) {
+        const pageBodyClass = pageBody.attr('class');
+        if (pageBodyClass) {
+            const existing = appBody.attr('class');
+            const merged = existing ? `${existing} ${pageBodyClass}` : pageBodyClass;
+            appBody.attr('class', merged);
+        }
+    }
+
     appHead.append(pageHead.children());
     appMain.html(pageMain.html() ?? '');
 
     return app.root().html() ?? '';
+}
+
+function injectOptInScripts(html: string, enable: EnableFlags | undefined, pageDir: string, sourceHtmlPath: string): string {
+    if (!enable) {
+        return html;
+    }
+
+    const document = load(html);
+
+    if (enable.spa) {
+        const existing = document(`script[src="${FILES.index}${EXTENSIONS.js}"]`);
+        if (existing.length === 0) {
+            document('head').append(`<script type="module" src="${FILES.index}${EXTENSIONS.js}"></script>`);
+        }
+    }
+
+    const tsCandidate = path.join(pageDir, `${FILES.index}${EXTENSIONS.ts}`);
+    const tsxCandidate = path.join(pageDir, `${FILES.index}.tsx`);
+    const jsCandidate = path.join(pageDir, `${FILES.index}${EXTENSIONS.js}`);
+    const jsxCandidate = path.join(pageDir, `${FILES.index}.jsx`);
+    const pageScriptExists = [tsCandidate, tsxCandidate, jsCandidate, jsxCandidate]
+        .some(candidate => fs.existsSync(candidate));
+    if (pageScriptExists) {
+        const hasScript = document(`script[src="${FILES.index}${EXTENSIONS.js}"]`).length > 0;
+        if (!hasScript) {
+            document('head').append(`<script type="module" src="${FILES.index}${EXTENSIONS.js}"></script>`);
+        }
+    }
+
+    if (enable.seamlessNav) {
+        const hasHelper = document('script[data-webstir="seamless-nav"]').length > 0;
+        if (!hasHelper) {
+            document('head').append(
+                `<script type="module" data-webstir="seamless-nav" src="/app/seamlessNav.js"></script>`
+            );
+        }
+    }
+
+    return document.root().html() ?? html;
 }
 
 async function rewriteForPublish(
@@ -168,6 +222,8 @@ async function rewriteForPublish(
         const selector = `script[src="${FILES.index}${EXTENSIONS.js}"]`;
         document(selector).attr('src', `/${FOLDERS.pages}/${pageName}/${manifest.js}`);
         document(selector).attr('type', 'module');
+    } else {
+        document(`script[src="${FILES.index}${EXTENSIONS.js}"]`).remove();
     }
 
     if (manifest.css) {

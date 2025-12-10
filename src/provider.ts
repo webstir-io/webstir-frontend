@@ -17,6 +17,7 @@ import { runPipeline } from './pipeline.js';
 import type { PipelineMode } from './pipeline.js';
 import { prepareWorkspaceConfig } from './config/setup.js';
 import type { FrontendConfig } from './types.js';
+import { readJson } from './utils/fs.js';
 
 interface PackageJson {
     readonly name: string;
@@ -39,10 +40,11 @@ function resolveWorkspacePaths(workspaceRoot: string): ResolvedModuleWorkspace {
 async function buildModule(options: ModuleBuildOptions): Promise<ModuleBuildResult> {
     const config = await prepareWorkspaceConfig(options.workspaceRoot);
     const mode = normalizeMode(options.env?.WEBSTIR_MODULE_MODE);
-    await runPipeline(config, mode, { changedFile: undefined });
+    const workspaceMode = await readWorkspaceMode(options.workspaceRoot);
+    await runPipeline(config, mode, { changedFile: undefined, enable: workspaceMode.enable });
 
     const artifacts = await collectArtifacts(config);
-    const manifest = createManifest(config, artifacts);
+    const manifest = createManifest(config, artifacts, workspaceMode.mode, workspaceMode.isSsg);
 
     return {
         artifacts,
@@ -82,10 +84,36 @@ async function collectArtifacts(config: FrontendConfig): Promise<ModuleArtifact[
     });
 }
 
-function createManifest(config: FrontendConfig, assets: readonly ModuleArtifact[]) {
+interface WorkspaceEnableFlags {
+    readonly spa?: boolean;
+    readonly seamlessNav?: boolean;
+    readonly backend?: boolean;
+}
+
+interface WorkspacePackageJson {
+    readonly webstir?: {
+        readonly mode?: string;
+        readonly enable?: WorkspaceEnableFlags;
+        readonly module?: {
+            readonly views?: ReadonlyArray<{
+                readonly renderMode?: string;
+            }>;
+        };
+    };
+}
+
+function createManifest(
+    config: FrontendConfig,
+    assets: readonly ModuleArtifact[],
+    workspaceMode?: string,
+    isSsgWorkspace?: boolean
+) {
     const entryPoints: string[] = [];
     const staticAssets: string[] = [];
     const diagnostics: ModuleDiagnostic[] = [];
+
+    const normalizedMode = workspaceMode?.toLowerCase();
+    const isSsg = isSsgWorkspace || normalizedMode === 'ssg';
 
     for (const asset of assets) {
         const relativePath = path.relative(config.paths.build.frontend, asset.path);
@@ -102,7 +130,7 @@ function createManifest(config: FrontendConfig, assets: readonly ModuleArtifact[
         const fallback = path.join(config.paths.build.app, 'index.js');
         if (fs.existsSync(fallback)) {
             entryPoints.push(path.relative(config.paths.build.frontend, fallback));
-        } else {
+        } else if (!isSsg) {
             diagnostics.push({
                 severity: 'warn',
                 message: 'No JavaScript entry points found under build/frontend.'
@@ -114,6 +142,20 @@ function createManifest(config: FrontendConfig, assets: readonly ModuleArtifact[
         entryPoints,
         staticAssets,
         diagnostics
+    };
+}
+
+async function readWorkspaceMode(workspaceRoot: string): Promise<{ mode?: string; isSsg: boolean; enable?: WorkspaceEnableFlags }> {
+    const pkgPath = path.join(workspaceRoot, 'package.json');
+    const pkg = await readJson<WorkspacePackageJson>(pkgPath);
+    const mode = pkg?.webstir?.mode;
+    const normalizedMode = typeof mode === 'string' ? mode.toLowerCase() : undefined;
+    const views = pkg?.webstir?.module?.views;
+    const hasSsgView = Array.isArray(views) && views.some(view => view.renderMode?.toLowerCase() === 'ssg');
+    return {
+        mode,
+        isSsg: normalizedMode === 'ssg' || hasSsgView,
+        enable: pkg?.webstir?.enable
     };
 }
 

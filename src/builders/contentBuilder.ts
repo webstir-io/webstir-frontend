@@ -70,7 +70,7 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
     for (const relative of files) {
         const sourcePath = path.join(contentRoot, relative);
         const markdown = await readFile(sourcePath);
-        const htmlBody = await marked.parse(markdown);
+        const htmlBody = rewriteMarkdownLinks(await marked.parse(markdown));
 
         const parsed = path.parse(relative);
         const segments: string[] = ['docs'];
@@ -79,7 +79,8 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
             segments.push(...parsed.dir.split(path.sep));
         }
 
-        if (parsed.name !== 'index') {
+        const isReadme = parsed.name.toLowerCase() === 'readme';
+        if (parsed.name !== 'index' && !isReadme) {
             segments.push(parsed.name);
         }
 
@@ -88,10 +89,17 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
 
         const mergedHtml = mergeContentIntoTemplate(templateHtml, pageNameForTitle, htmlBody);
 
+        // Write to build (folder index)
         const targetDir = path.join(config.paths.build.frontend, FOLDERS.pages, pagePath);
         await ensureDir(targetDir);
         const targetPath = path.join(targetDir, FILES.indexHtml);
         await writeFile(targetPath, mergedHtml);
+
+        // Mirror to dist so static hosting uses pre-rendered docs too
+        const distDir = path.join(config.paths.dist.frontend, FOLDERS.pages, pagePath);
+        await ensureDir(distDir);
+        const distPath = path.join(distDir, FILES.indexHtml);
+        await writeFile(distPath, mergedHtml);
     }
 }
 
@@ -127,11 +135,12 @@ async function publishContentManifests(context: BuilderContext): Promise<void> {
             segments.push(...parsed.dir.split(path.sep));
         }
 
-        if (parsed.name !== 'index') {
+        const isReadme = parsed.name.toLowerCase() === 'readme';
+        if (parsed.name !== 'index' && !isReadme) {
             segments.push(parsed.name);
         }
 
-        const href = '/' + segments.join('/');
+        const href = '/' + segments.join('/') + '/';
         const title = resolveTitle(frontmatter, content, segments);
         const textContent = await extractPlainTextFromMarkdown(content);
 
@@ -293,6 +302,32 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
     main.html(`<article>${bodyHtml}</article>`);
 
     return document.root().html() ?? '';
+}
+
+function rewriteMarkdownLinks(html: string): string {
+    const document = load(html);
+    document('a[href]').each((_, element) => {
+        const anchor = document(element);
+        const href = anchor.attr('href');
+        if (!href) return;
+
+        // Only rewrite local .md links (no protocol, no leading //)
+        if (/^[a-z]+:\/\//i.test(href) || href.startsWith('//')) {
+            return;
+        }
+
+        const mdMatch = href.match(/^(.*?)(\.md)(#.*)?$/i);
+        if (!mdMatch) return;
+
+        const base = mdMatch[1];
+        const hash = mdMatch[3] ?? '';
+        const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+
+        // Preserve relative path segments; remove the .md extension and ensure trailing slash
+        anchor.attr('href', `${normalizedBase}${hash}`);
+    });
+
+    return document.root().html() ?? html;
 }
 
 function escapeHtml(value: string): string {
