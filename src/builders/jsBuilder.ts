@@ -55,7 +55,8 @@ async function bundleJavaScript(context: BuilderContext, isProduction: boolean):
         }
     }
 
-    if (builtAny || context.enable?.seamlessNav) {
+    // Always copy dev runtime scripts in dev builds to support HMR/refresh even when no page JS exists.
+    if (!isProduction || context.enable?.seamlessNav) {
         await copyRuntimeScripts(config, context.enable, isProduction);
     }
 }
@@ -123,6 +124,7 @@ async function copyRuntimeScripts(
     isProduction: boolean
 ): Promise<void> {
     const scripts = [
+        // Always copy dev runtime in dev builds to support live reload, even if no page JS exists.
         { name: FILES.refreshJs, copyToDist: false, required: !isProduction },
         { name: FILES.hmrJs, copyToDist: false, required: !isProduction },
         { name: 'seamlessNav.js', copyToDist: true, required: enable?.seamlessNav === true }
