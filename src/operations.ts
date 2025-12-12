@@ -5,6 +5,7 @@ import { prepareWorkspaceConfig } from './config/setup.js';
 import { applySsgRouting } from './ssg.js';
 import { generateSsgViewData } from './ssgViews.js';
 import { ensureSsgViewMetadataForPage } from './ssgMetadata.js';
+import { assertNoSsgRoutes } from './ssgValidation.js';
 
 export async function runBuild(options: FrontendCommandOptions): Promise<void> {
     const config = await prepareWorkspaceConfig(options.workspaceRoot);
@@ -19,6 +20,11 @@ export async function runPublish(options: FrontendCommandOptions): Promise<void>
 
     const modeLabel = options.publishMode === 'ssg' ? 'SSG publish' : 'publish';
     console.info(`[webstir-frontend] Running ${modeLabel} pipeline...`);
+
+    if (options.publishMode === 'ssg') {
+        await assertNoSsgRoutes(config.paths.workspace);
+    }
+
     await runPipeline(config, 'publish');
     if (options.publishMode === 'ssg') {
         await generateSsgViewData(config);

@@ -3,6 +3,7 @@ import { FOLDERS, FILES } from './core/constants.js';
 import type { FrontendConfig } from './types.js';
 import { copy, ensureDir, pathExists, readJson } from './utils/fs.js';
 import { getPageDirectories } from './core/pages.js';
+import { assertNoSsgRoutesInModuleConfig } from './ssgValidation.js';
 
 interface WorkspaceModuleView {
     readonly path?: string;
@@ -10,8 +11,15 @@ interface WorkspaceModuleView {
     readonly staticPaths?: readonly string[];
 }
 
+interface WorkspaceModuleRouteGuard {
+    readonly renderMode?: unknown;
+    readonly staticPaths?: unknown;
+    readonly ssg?: unknown;
+}
+
 interface WorkspaceModuleConfig {
     readonly views?: readonly WorkspaceModuleView[];
+    readonly routes?: readonly WorkspaceModuleRouteGuard[];
 }
 
 interface WorkspacePackageJson {
@@ -68,8 +76,9 @@ async function applyStaticPathAliases(
     const pkgPath = path.join(workspaceRoot, 'package.json');
     const pkg = await readJson<WorkspacePackageJson>(pkgPath);
     const moduleConfig = pkg?.webstir?.module;
-    const views = moduleConfig?.views ?? [];
+    assertNoSsgRoutesInModuleConfig(moduleConfig);
 
+    const views = moduleConfig?.views ?? [];
     if (views.length === 0) {
         return;
     }

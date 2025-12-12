@@ -51,10 +51,6 @@ export async function generateSsgViewData(config: FrontendConfig): Promise<void>
     const moduleConfig = pkg?.webstir?.module;
     const viewMetadata = moduleConfig?.views ?? [];
 
-    if (viewMetadata.length === 0) {
-        return;
-    }
-
     const moduleDefinition = await loadBackendModuleDefinition(workspaceRoot);
     if (!moduleDefinition?.views || moduleDefinition.views.length === 0) {
         return;
@@ -286,4 +282,3 @@ function createMinimalSsrContext(pathname: string, params: Record<string, string
         now: () => new Date()
     };
 }
-
