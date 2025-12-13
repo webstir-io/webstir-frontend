@@ -17,7 +17,7 @@ test('ssg publish rejects route-level renderMode/staticPaths/ssg metadata', asyn
         name: 'webstir-project',
         version: '1.0.0',
         webstir: {
-            module: {
+            moduleManifest: {
                 routes: [
                     {
                         name: 'ApiRoute',
@@ -33,7 +33,7 @@ test('ssg publish rejects route-level renderMode/staticPaths/ssg metadata', asyn
     try {
         await assert.rejects(
             runPublish({ workspaceRoot: workspace, publishMode: 'ssg' }),
-            /SSG publish expects SSG metadata under `webstir\.module\.views`/i
+            /SSG publish expects SSG metadata under `webstir\.moduleManifest\.views`/i
         );
     } finally {
         await fs.rm(workspace, { recursive: true, force: true });
@@ -45,7 +45,7 @@ test('ssg publish rejects route-level staticPaths without renderMode', async () 
         name: 'webstir-project',
         version: '1.0.0',
         webstir: {
-            module: {
+            moduleManifest: {
                 routes: [
                     {
                         name: 'ApiRoute',
@@ -61,10 +61,9 @@ test('ssg publish rejects route-level staticPaths without renderMode', async () 
     try {
         await assert.rejects(
             runPublish({ workspaceRoot: workspace, publishMode: 'ssg' }),
-            /SSG publish expects SSG metadata under `webstir\.module\.views`/i
+            /SSG publish expects SSG metadata under `webstir\.moduleManifest\.views`/i
         );
     } finally {
         await fs.rm(workspace, { recursive: true, force: true });
     }
 });
-

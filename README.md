@@ -129,7 +129,7 @@ the provider:
 
 - Runs the normal publish pipeline to populate `dist/frontend/**`.
 - Creates static-friendly `index.html` aliases (root and per-page).
-- When `package.json` includes `webstir.module.views` with `renderMode: 'ssg'` and `staticPaths`, uses those paths to add additional `index.html` aliases under `dist/frontend/**`.
+- When `package.json` includes `webstir.moduleManifest.views` with `renderMode: 'ssg'` and `staticPaths`, uses those paths to add additional `index.html` aliases under `dist/frontend/**`.
 
 ## Maintainer Workflow
 

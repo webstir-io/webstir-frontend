@@ -5,6 +5,7 @@ import { ensureDir, pathExists, writeFile } from '../utils/fs.js';
 export interface PageScaffoldOptions {
     readonly workspaceRoot: string;
     readonly pageName: string;
+    readonly mode?: 'standard' | 'ssg';
     readonly paths: {
         readonly pages: string;
         readonly app: string;
@@ -19,14 +20,24 @@ export async function createPageScaffold(options: PageScaffoldOptions): Promise<
 
     await ensureDir(pageDir);
 
-    await Promise.all([
-        writeFile(path.join(pageDir, `${FILES.index}${EXTENSIONS.html}`), buildHtmlTemplate(options.pageName)),
-        writeFile(path.join(pageDir, `${FILES.index}${EXTENSIONS.css}`), buildCssTemplate(options.pageName)),
-        writeFile(path.join(pageDir, `${FILES.index}${EXTENSIONS.ts}`), buildScriptTemplate())
-    ]);
+    const mode = options.mode ?? 'standard';
+    const writes: Promise<void>[] = [
+        writeFile(path.join(pageDir, `${FILES.index}${EXTENSIONS.html}`), buildHtmlTemplate(options.pageName, mode)),
+        writeFile(path.join(pageDir, `${FILES.index}${EXTENSIONS.css}`), buildCssTemplate(options.pageName))
+    ];
+
+    if (mode === 'standard') {
+        writes.push(writeFile(path.join(pageDir, `${FILES.index}${EXTENSIONS.ts}`), buildScriptTemplate()));
+    }
+
+    await Promise.all(writes);
 }
 
-function buildHtmlTemplate(pageName: string): string {
+function buildHtmlTemplate(pageName: string, mode: 'standard' | 'ssg'): string {
+    const script = mode === 'standard'
+        ? `    <script type="module" src="${FILES.index}${EXTENSIONS.js}" async></script>`
+        : `    <!-- Add ${FILES.index}${EXTENSIONS.ts} to enable JS on this page. -->`;
+
     return `<head>
     <meta charset="utf-8">
     <title>${pageName}</title>
@@ -37,7 +48,7 @@ function buildHtmlTemplate(pageName: string): string {
         <h1>${pageName}</h1>
         <p>Content for the ${pageName} page.</p>
     </main>
-    <script type="module" src="${FILES.index}${EXTENSIONS.js}" async></script>
+${script}
 </body>
 `;
 }

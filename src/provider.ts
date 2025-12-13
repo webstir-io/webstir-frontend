@@ -18,6 +18,9 @@ import type { PipelineMode } from './pipeline.js';
 import { prepareWorkspaceConfig } from './config/setup.js';
 import type { FrontendConfig } from './types.js';
 import { readJson } from './utils/fs.js';
+import { applySsgRouting } from './ssg.js';
+import { generateSsgViewData } from './ssgViews.js';
+import { assertNoSsgRoutes } from './ssgValidation.js';
 
 interface PackageJson {
     readonly name: string;
@@ -41,7 +44,19 @@ async function buildModule(options: ModuleBuildOptions): Promise<ModuleBuildResu
     const config = await prepareWorkspaceConfig(options.workspaceRoot);
     const mode = normalizeMode(options.env?.WEBSTIR_MODULE_MODE);
     const workspaceMode = await readWorkspaceMode(options.workspaceRoot);
+    const frontendMode = normalizeFrontendMode(options.env?.WEBSTIR_FRONTEND_MODE);
+    const shouldRunSsgPublish =
+        mode === 'publish' && (frontendMode === 'ssg' || (frontendMode === undefined && workspaceMode.mode === 'ssg'));
+
+    if (shouldRunSsgPublish) {
+        await assertNoSsgRoutes(config.paths.workspace);
+    }
     await runPipeline(config, mode, { changedFile: undefined, enable: workspaceMode.enable });
+
+    if (shouldRunSsgPublish) {
+        await generateSsgViewData(config);
+        await applySsgRouting(config);
+    }
 
     const artifacts = await collectArtifacts(config);
     const manifest = createManifest(config, artifacts, workspaceMode.mode, workspaceMode.isSsg);
@@ -94,7 +109,7 @@ interface WorkspacePackageJson {
     readonly webstir?: {
         readonly mode?: string;
         readonly enable?: WorkspaceEnableFlags;
-        readonly module?: {
+        readonly moduleManifest?: {
             readonly views?: ReadonlyArray<{
                 readonly renderMode?: string;
             }>;
@@ -150,13 +165,26 @@ async function readWorkspaceMode(workspaceRoot: string): Promise<{ mode?: string
     const pkg = await readJson<WorkspacePackageJson>(pkgPath);
     const mode = pkg?.webstir?.mode;
     const normalizedMode = typeof mode === 'string' ? mode.toLowerCase() : undefined;
-    const views = pkg?.webstir?.module?.views;
+    const views = pkg?.webstir?.moduleManifest?.views;
     const hasSsgView = Array.isArray(views) && views.some(view => view.renderMode?.toLowerCase() === 'ssg');
     return {
         mode,
         isSsg: normalizedMode === 'ssg' || hasSsgView,
         enable: pkg?.webstir?.enable
     };
+}
+
+function normalizeFrontendMode(value: unknown): 'bundle' | 'ssg' | undefined {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'ssg'
+        ? 'ssg'
+        : normalized === 'bundle'
+            ? 'bundle'
+            : undefined;
 }
 
 export const frontendProvider: ModuleProvider = {

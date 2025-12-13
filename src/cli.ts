@@ -61,13 +61,14 @@ program
     .command('add-page <name>')
     .description('Scaffold a new frontend page (HTML/CSS/TS)')
     .requiredOption('-w, --workspace <path>', 'Absolute path to the workspace root')
-    .option('-m, --mode <mode>', 'Page mode: standard or ssg', 'standard')
+    .option('-m, --mode <mode>', 'Page mode: standard or ssg (defaults to ssg when webstir.mode=ssg)')
     .action(async (name, cmd) => {
         try {
+            const rawMode = typeof cmd.mode === 'string' ? cmd.mode.toLowerCase() : undefined;
             await runAddPage({
                 workspaceRoot: cmd.workspace,
                 pageName: name,
-                ssg: cmd.mode === 'ssg'
+                ssg: rawMode === 'ssg' ? true : rawMode === 'standard' ? false : undefined
             });
         } catch (error) {
             handleError(error);

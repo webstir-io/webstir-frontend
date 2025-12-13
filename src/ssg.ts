@@ -25,7 +25,8 @@ interface WorkspaceModuleConfig {
 interface WorkspacePackageJson {
     readonly name?: string;
     readonly webstir?: {
-        readonly module?: WorkspaceModuleConfig;
+        readonly mode?: string;
+        readonly moduleManifest?: WorkspaceModuleConfig;
     };
 }
 
@@ -75,7 +76,9 @@ async function applyStaticPathAliases(
     const workspaceRoot = config.paths.workspace;
     const pkgPath = path.join(workspaceRoot, 'package.json');
     const pkg = await readJson<WorkspacePackageJson>(pkgPath);
-    const moduleConfig = pkg?.webstir?.module;
+    const workspaceMode = pkg?.webstir?.mode;
+    const isSsgWorkspace = typeof workspaceMode === 'string' && workspaceMode.toLowerCase() === 'ssg';
+    const moduleConfig = pkg?.webstir?.moduleManifest;
     assertNoSsgRoutesInModuleConfig(moduleConfig);
 
     const views = moduleConfig?.views ?? [];
@@ -84,11 +87,12 @@ async function applyStaticPathAliases(
     }
 
     for (const view of views) {
-        if (view.renderMode !== 'ssg') {
+        const renderMode = view.renderMode ?? (isSsgWorkspace ? 'ssg' : undefined);
+        if (renderMode !== 'ssg') {
             continue;
         }
 
-        const paths = view.staticPaths ?? [];
+        const paths = getEffectiveStaticPaths(view, isSsgWorkspace);
         for (const raw of paths) {
             if (typeof raw !== 'string' || raw.length === 0) {
                 continue;
@@ -145,4 +149,40 @@ function firstPathSegment(pathname: string): string | undefined {
         return undefined;
     }
     return segment;
+}
+
+function getEffectiveStaticPaths(view: WorkspaceModuleView, isSsgWorkspace: boolean): readonly string[] {
+    const explicitPaths = view.staticPaths ?? [];
+    if (explicitPaths.length > 0) {
+        return explicitPaths;
+    }
+
+    if (!isSsgWorkspace) {
+        return [];
+    }
+
+    const candidate = view.path ?? '';
+    if (!isDefaultStaticPathCandidate(candidate)) {
+        return [];
+    }
+
+    return [candidate];
+}
+
+function isDefaultStaticPathCandidate(template: string): boolean {
+    if (typeof template !== 'string') {
+        return false;
+    }
+
+    const trimmed = template.trim();
+    if (!trimmed.startsWith('/')) {
+        return false;
+    }
+
+    // Avoid treating parameterized or wildcard templates as a single concrete path.
+    if (trimmed.includes(':') || trimmed.includes('*')) {
+        return false;
+    }
+
+    return true;
 }

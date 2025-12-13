@@ -20,31 +20,37 @@ interface WorkspaceModuleConfig {
 interface WorkspacePackageJson {
     readonly name?: string;
     readonly webstir?: {
-        readonly module?: WorkspaceModuleConfig;
+        readonly mode?: string;
+        readonly moduleManifest?: WorkspaceModuleConfig;
     };
 }
 
 export async function ensureSsgViewMetadataForPage(options: SsgViewMetadataOptions): Promise<void> {
     const pkgPath = path.join(options.workspaceRoot, 'package.json');
     const pkg = (await readJson<WorkspacePackageJson>(pkgPath)) ?? {};
+    const workspaceMode = pkg.webstir?.mode;
+    const isSsgWorkspace = typeof workspaceMode === 'string' && workspaceMode.toLowerCase() === 'ssg';
+    if (isSsgWorkspace) {
+        return;
+    }
 
     const webstir = pkg.webstir ?? {};
-    const moduleConfig = webstir.module ?? {};
+    const moduleConfig = webstir.moduleManifest ?? {};
     const existingViews = Array.isArray(moduleConfig.views) ? [...moduleConfig.views] : [];
 
     const pageName = options.pageName;
     const isHome = pageName === 'home';
     const viewName = `${capitalize(pageName)}View`;
     const viewPath = isHome ? '/' : `/${pageName}`;
-    const staticPaths = [viewPath];
 
     const existingIndex = existingViews.findIndex((view) => view?.name === viewName || view?.path === viewPath);
+    const existing = existingIndex >= 0 ? (existingViews[existingIndex] ?? {}) : {};
     const nextView: WorkspaceModuleView = {
-        ...(existingIndex >= 0 ? existingViews[existingIndex] : {}),
+        ...existing,
         name: viewName,
         path: viewPath,
         renderMode: 'ssg',
-        staticPaths
+        staticPaths: [viewPath]
     };
 
     if (existingIndex >= 0) {
@@ -57,7 +63,7 @@ export async function ensureSsgViewMetadataForPage(options: SsgViewMetadataOptio
         ...pkg,
         webstir: {
             ...webstir,
-            module: {
+            moduleManifest: {
                 ...moduleConfig,
                 views: existingViews
             }
@@ -73,4 +79,3 @@ function capitalize(value: string): string {
     }
     return value.charAt(0).toUpperCase() + value.slice(1);
 }
-

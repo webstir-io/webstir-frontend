@@ -13,7 +13,7 @@ interface WorkspaceModuleConfigGuard {
 
 interface WorkspacePackageJsonGuard {
     readonly webstir?: {
-        readonly module?: WorkspaceModuleConfigGuard;
+        readonly moduleManifest?: WorkspaceModuleConfigGuard;
     };
 }
 
@@ -40,14 +40,13 @@ export function assertNoSsgRoutesInModuleConfig(moduleConfig: WorkspaceModuleCon
     }
 
     throw new Error(
-        "SSG publish expects SSG metadata under `webstir.module.views`, not `webstir.module.routes`. Move `renderMode: 'ssg'`, `staticPaths`, and/or `ssg` onto the corresponding view definition."
+        "SSG publish expects SSG metadata under `webstir.moduleManifest.views`, not `webstir.moduleManifest.routes`. Move `renderMode: 'ssg'`, `staticPaths`, and/or `ssg` onto the corresponding view definition."
     );
 }
 
 export async function assertNoSsgRoutes(workspaceRoot: string): Promise<void> {
     const pkgPath = path.join(workspaceRoot, 'package.json');
     const pkg = await readJson<WorkspacePackageJsonGuard>(pkgPath);
-    const moduleConfig = pkg?.webstir?.module;
+    const moduleConfig = pkg?.webstir?.moduleManifest;
     assertNoSsgRoutesInModuleConfig(moduleConfig);
 }
-

@@ -39,7 +39,7 @@ const JAVASCRIPT_EXTENSIONS = [EXTENSIONS.ts, EXTENSIONS.js, '.tsx', '.jsx'] as 
 interface WorkspacePackageJson {
     readonly webstir?: {
         readonly mode?: string;
-        readonly module?: {
+        readonly moduleManifest?: {
             readonly views?: ReadonlyArray<{
                 readonly renderMode?: string;
             }>;
@@ -516,7 +516,7 @@ export class WatchCoordinator {
             return true;
         }
 
-        const views = pkg.webstir.module?.views;
+        const views = pkg.webstir.moduleManifest?.views;
         return Array.isArray(views) && views.some(view => view.renderMode?.toLowerCase() === 'ssg');
     }
 

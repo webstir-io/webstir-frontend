@@ -17,7 +17,8 @@ interface WorkspaceModuleConfig {
 
 interface WorkspacePackageJson {
     readonly webstir?: {
-        readonly module?: WorkspaceModuleConfig;
+        readonly mode?: string;
+        readonly moduleManifest?: WorkspaceModuleConfig;
     };
 }
 
@@ -48,8 +49,10 @@ export async function generateSsgViewData(config: FrontendConfig): Promise<void>
     const workspaceRoot = config.paths.workspace;
     const pkgPath = path.join(workspaceRoot, 'package.json');
     const pkg = await readJson<WorkspacePackageJson>(pkgPath);
-    const moduleConfig = pkg?.webstir?.module;
+    const moduleConfig = pkg?.webstir?.moduleManifest;
     const viewMetadata = moduleConfig?.views ?? [];
+    const workspaceMode = pkg?.webstir?.mode;
+    const isSsgWorkspace = typeof workspaceMode === 'string' && workspaceMode.toLowerCase() === 'ssg';
 
     const moduleDefinition = await loadBackendModuleDefinition(workspaceRoot);
     if (!moduleDefinition?.views || moduleDefinition.views.length === 0) {
@@ -63,12 +66,12 @@ export async function generateSsgViewData(config: FrontendConfig): Promise<void>
         const viewName = definition.name ?? '';
         const viewPathTemplate = definition.path ?? '';
         const meta = findViewMetadata(viewMetadata, viewName, viewPathTemplate);
-        const renderMode = meta?.renderMode ?? definition.renderMode;
+        const renderMode = meta?.renderMode ?? definition.renderMode ?? (isSsgWorkspace ? 'ssg' : undefined);
         if (renderMode !== 'ssg') {
             continue;
         }
 
-        const staticPaths = meta?.staticPaths ?? definition.staticPaths ?? [];
+        const staticPaths = getEffectiveStaticPaths(meta, definition, isSsgWorkspace);
         if (!spec.load || !Array.isArray(staticPaths) || staticPaths.length === 0) {
             continue;
         }
@@ -281,4 +284,43 @@ function createMinimalSsrContext(pathname: string, params: Record<string, string
         logger,
         now: () => new Date()
     };
+}
+
+function getEffectiveStaticPaths(
+    meta: WorkspaceModuleViewMetadata | undefined,
+    definition: ViewDefinitionLike,
+    isSsgWorkspace: boolean
+): readonly string[] {
+    const explicit = meta?.staticPaths ?? definition.staticPaths ?? [];
+    if (Array.isArray(explicit) && explicit.length > 0) {
+        return explicit;
+    }
+
+    if (!isSsgWorkspace) {
+        return [];
+    }
+
+    const candidate = meta?.path ?? definition.path ?? '';
+    if (!isDefaultStaticPathCandidate(candidate)) {
+        return [];
+    }
+
+    return [candidate];
+}
+
+function isDefaultStaticPathCandidate(template: string): boolean {
+    if (typeof template !== 'string') {
+        return false;
+    }
+
+    const trimmed = template.trim();
+    if (!trimmed.startsWith('/')) {
+        return false;
+    }
+
+    if (trimmed.includes(':') || trimmed.includes('*')) {
+        return false;
+    }
+
+    return true;
 }
