@@ -67,7 +67,7 @@ test('content builder strips frontmatter and injects app styles', async (t) => {
     assert.ok(!html.includes('title: Content pipeline'), 'frontmatter should not be rendered');
     assert.ok(/<article\b/i.test(html), 'expected markdown wrapped in <article>');
     assert.ok(html.includes('href="/app/app.css"'), 'expected app.css link injected');
-    assert.ok(html.includes('href="/docs/index.css"'), 'expected docs css link injected');
+    assert.ok(html.includes('href="/pages/docs/index.css"'), 'expected docs css link injected');
 
     const navPath = path.join(workspace, 'build', 'frontend', 'docs-nav.json');
     const searchPath = path.join(workspace, 'build', 'frontend', 'docs-search.json');

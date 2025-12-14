@@ -354,7 +354,7 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
     }
 
     // Ensure docs pages load the docs layout styles.
-    const docsCssHref = `/docs/index.css`;
+    const docsCssHref = `/${FOLDERS.pages}/docs/index.css`;
     const existingDocsStylesheet =
         head.find(`link[rel="stylesheet"][href="${docsCssHref}"]`).first().length > 0
         || head.find('link[rel="stylesheet"]').toArray().some((element) => {
@@ -399,7 +399,7 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
         '    </div>',
         '  </div>',
         '</section>',
-        '<script type="module" src="/docs/index.js"></script>'
+        `<script type="module" src="/${FOLDERS.pages}/docs/index.js"></script>`
     ].join('\n');
 
     main.html(docsLayoutHtml);
