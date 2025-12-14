@@ -70,9 +70,7 @@ test('content builder strips frontmatter and injects app styles', async (t) => {
     assert.ok(html.includes('href="/pages/docs/index.css"'), 'expected docs css link injected');
 
     const navPath = path.join(workspace, 'build', 'frontend', 'docs-nav.json');
-    const searchPath = path.join(workspace, 'build', 'frontend', 'docs-search.json');
     assert.equal(fssync.existsSync(navPath), true, `expected ${navPath}`);
-    assert.equal(fssync.existsSync(searchPath), true, `expected ${searchPath}`);
 
     const nav = JSON.parse(await fs.readFile(navPath, 'utf8'));
     assert.ok(Array.isArray(nav) && nav.length > 0, 'expected docs-nav.json to contain entries');

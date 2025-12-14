@@ -20,12 +20,6 @@ interface DocsNavEntry {
     readonly order?: number;
 }
 
-interface DocsSearchEntry {
-    readonly path: string;
-    readonly title: string;
-    readonly excerpt: string;
-}
-
 export function createContentBuilder(context: BuilderContext): Builder {
     return {
         name: 'content',
@@ -106,15 +100,12 @@ async function buildContentManifests(context: BuilderContext): Promise<void> {
         return;
     }
 
-    const { navEntries, searchEntries } = await collectContentManifests(context);
+    const navEntries = await collectContentManifests(context);
     if (navEntries.length === 0) {
         return;
     }
 
-    await writeContentManifests([config.paths.build.frontend, config.paths.dist.frontend], {
-        navEntries,
-        searchEntries
-    });
+    await writeContentNavManifest([config.paths.build.frontend, config.paths.dist.frontend], navEntries);
 }
 
 async function publishContentManifests(context: BuilderContext): Promise<void> {
@@ -125,17 +116,15 @@ async function publishContentManifests(context: BuilderContext): Promise<void> {
         return;
     }
 
-    const { navEntries, searchEntries } = await collectContentManifests(context);
+    const navEntries = await collectContentManifests(context);
     if (navEntries.length === 0) {
         return;
     }
 
-    await writeContentManifests([config.paths.dist.frontend], { navEntries, searchEntries });
+    await writeContentNavManifest([config.paths.dist.frontend], navEntries);
 }
 
-async function collectContentManifests(
-    context: BuilderContext
-): Promise<{ navEntries: DocsNavEntry[]; searchEntries: DocsSearchEntry[] }> {
+async function collectContentManifests(context: BuilderContext): Promise<DocsNavEntry[]> {
     const { config } = context;
     const contentRoot = config.paths.src.content;
 
@@ -145,11 +134,10 @@ async function collectContentManifests(
     });
 
     if (files.length === 0) {
-        return { navEntries: [], searchEntries: [] };
+        return [];
     }
 
     const navEntries: DocsNavEntry[] = [];
-    const searchEntries: DocsSearchEntry[] = [];
 
     for (const relative of files) {
         const sourcePath = path.join(contentRoot, relative);
@@ -165,14 +153,6 @@ async function collectContentManifests(
 
         const href = '/' + segments.join('/') + '/';
         const title = resolveTitle(frontmatter, content, segments);
-        const textContent = await extractPlainTextFromMarkdown(content);
-
-        const baseExcerpt = frontmatter.description && frontmatter.description.trim()
-            ? frontmatter.description.trim()
-            : textContent;
-        const excerpt =
-            baseExcerpt.length > 240 ? `${baseExcerpt.slice(0, 240).trimEnd()}…` : baseExcerpt;
-
         const order = frontmatter.order;
 
         navEntries.push({
@@ -181,14 +161,6 @@ async function collectContentManifests(
             section,
             order
         });
-
-        if (textContent) {
-            searchEntries.push({
-                path: href,
-                title,
-                excerpt
-            });
-        }
     }
 
     navEntries.sort((a, b) => {
@@ -207,20 +179,18 @@ async function collectContentManifests(
         return a.path.localeCompare(b.path);
     });
 
-    return { navEntries, searchEntries };
+    return navEntries;
 }
 
-async function writeContentManifests(
+async function writeContentNavManifest(
     outputRoots: readonly string[],
-    manifests: { navEntries: readonly DocsNavEntry[]; searchEntries: readonly DocsSearchEntry[] }
+    navEntries: readonly DocsNavEntry[]
 ): Promise<void> {
     for (const outputRoot of outputRoots) {
         const navOutputPath = path.join(outputRoot, 'docs-nav.json');
-        const searchOutputPath = path.join(outputRoot, 'docs-search.json');
 
         await ensureDir(path.dirname(navOutputPath));
-        await writeFile(navOutputPath, JSON.stringify(manifests.navEntries, undefined, 2));
-        await writeFile(searchOutputPath, JSON.stringify(manifests.searchEntries, undefined, 2));
+        await writeFile(navOutputPath, JSON.stringify(navEntries, undefined, 2));
     }
 }
 
@@ -307,13 +277,6 @@ function resolveTitle(frontmatter: ContentFrontmatter, content: string, segments
     return toTitleCase(normalized);
 }
 
-async function extractPlainTextFromMarkdown(markdown: string): Promise<string> {
-    const html = await marked.parse(markdown);
-    const document = load(html);
-    const text = document.text().replace(/\s+/g, ' ').trim();
-    return text;
-}
-
 function toTitleCase(value: string): string {
     return value
         .split(/\s+/)
@@ -382,11 +345,6 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
         '<section class="docs-layout">',
         '  <div class="container docs-layout__inner">',
         '    <aside class="docs-sidebar" aria-label="Docs navigation">',
-        '      <div class="docs-sidebar__search">',
-        '        <label class="sr-only" for="docs-search">Search docs</label>',
-        '        <input id="docs-search" type="search" placeholder="Search docs…" autocomplete="off" />',
-        '        <div id="docs-results" class="docs-results" hidden></div>',
-        '      </div>',
         '      <div class="docs-sidebar__header">',
         '        <a class="docs-sidebar__title" href="/docs/">Docs</a>',
         '      </div>',
