@@ -31,6 +31,7 @@ export function createContentBuilder(context: BuilderContext): Builder {
         name: 'content',
         async build(): Promise<void> {
             await buildContentPages(context);
+            await buildContentManifests(context);
         },
         async publish(): Promise<void> {
             await publishContentManifests(context);
@@ -73,18 +74,7 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
         const { frontmatter, content } = extractFrontmatter(markdown);
         const htmlBody = rewriteMarkdownLinks(await marked.parse(content));
 
-        const parsed = path.parse(relative);
-        const segments: string[] = ['docs'];
-
-        if (parsed.dir) {
-            segments.push(...parsed.dir.split(path.sep));
-        }
-
-        const isReadme = parsed.name.toLowerCase() === 'readme';
-        if (parsed.name !== 'index' && !isReadme) {
-            segments.push(parsed.name);
-        }
-
+        const segments = resolveDocsSegments(relative);
         const pagePath = path.join(...segments);
         const pageTitle = resolveTitle(frontmatter, content, segments);
 
@@ -104,6 +94,29 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
     }
 }
 
+async function buildContentManifests(context: BuilderContext): Promise<void> {
+    const { config } = context;
+    const contentRoot = config.paths.src.content;
+
+    if (!(await pathExists(contentRoot))) {
+        return;
+    }
+
+    if (!shouldProcess(context, [{ directory: contentRoot, extensions: ['.md'] }])) {
+        return;
+    }
+
+    const { navEntries, searchEntries } = await collectContentManifests(context);
+    if (navEntries.length === 0) {
+        return;
+    }
+
+    await writeContentManifests([config.paths.build.frontend, config.paths.dist.frontend], {
+        navEntries,
+        searchEntries
+    });
+}
+
 async function publishContentManifests(context: BuilderContext): Promise<void> {
     const { config } = context;
     const contentRoot = config.paths.src.content;
@@ -112,13 +125,27 @@ async function publishContentManifests(context: BuilderContext): Promise<void> {
         return;
     }
 
+    const { navEntries, searchEntries } = await collectContentManifests(context);
+    if (navEntries.length === 0) {
+        return;
+    }
+
+    await writeContentManifests([config.paths.dist.frontend], { navEntries, searchEntries });
+}
+
+async function collectContentManifests(
+    context: BuilderContext
+): Promise<{ navEntries: DocsNavEntry[]; searchEntries: DocsSearchEntry[] }> {
+    const { config } = context;
+    const contentRoot = config.paths.src.content;
+
     const files = await glob('**/*.md', {
         cwd: contentRoot,
         nodir: true
     });
 
     if (files.length === 0) {
-        return;
+        return { navEntries: [], searchEntries: [] };
     }
 
     const navEntries: DocsNavEntry[] = [];
@@ -129,18 +156,7 @@ async function publishContentManifests(context: BuilderContext): Promise<void> {
         const markdown = await readFile(sourcePath);
         const { frontmatter, content } = extractFrontmatter(markdown);
 
-        const parsed = path.parse(relative);
-        const segments: string[] = ['docs'];
-
-        if (parsed.dir) {
-            segments.push(...parsed.dir.split(path.sep));
-        }
-
-        const isReadme = parsed.name.toLowerCase() === 'readme';
-        if (parsed.name !== 'index' && !isReadme) {
-            segments.push(parsed.name);
-        }
-
+        const segments = resolveDocsSegments(relative);
         const href = '/' + segments.join('/') + '/';
         const title = resolveTitle(frontmatter, content, segments);
         const textContent = await extractPlainTextFromMarkdown(content);
@@ -186,12 +202,40 @@ async function publishContentManifests(context: BuilderContext): Promise<void> {
         return a.path.localeCompare(b.path);
     });
 
-    const navOutputPath = path.join(config.paths.dist.frontend, 'docs-nav.json');
-    const searchOutputPath = path.join(config.paths.dist.frontend, 'docs-search.json');
+    return { navEntries, searchEntries };
+}
 
-    await ensureDir(path.dirname(navOutputPath));
-    await writeFile(navOutputPath, JSON.stringify(navEntries, undefined, 2));
-    await writeFile(searchOutputPath, JSON.stringify(searchEntries, undefined, 2));
+async function writeContentManifests(
+    outputRoots: readonly string[],
+    manifests: { navEntries: readonly DocsNavEntry[]; searchEntries: readonly DocsSearchEntry[] }
+): Promise<void> {
+    for (const outputRoot of outputRoots) {
+        const navOutputPath = path.join(outputRoot, 'docs-nav.json');
+        const searchOutputPath = path.join(outputRoot, 'docs-search.json');
+
+        await ensureDir(path.dirname(navOutputPath));
+        await writeFile(navOutputPath, JSON.stringify(manifests.navEntries, undefined, 2));
+        await writeFile(searchOutputPath, JSON.stringify(manifests.searchEntries, undefined, 2));
+    }
+}
+
+function resolveDocsSegments(relative: string): string[] {
+    const parsed = path.parse(relative);
+    const segments: string[] = ['docs'];
+
+    if (parsed.dir) {
+        segments.push(...parsed.dir.split(path.sep));
+    }
+
+    const isReadme = parsed.name.toLowerCase() === 'readme';
+    const isFolderIndex = parsed.name === 'index' || isReadme;
+
+    // Reserve `/docs/` for a potential docs landing page; root docs become `/docs/<name>/`.
+    if (!isFolderIndex || !parsed.dir) {
+        segments.push(parsed.name);
+    }
+
+    return segments;
 }
 
 function extractFrontmatter(markdown: string): { frontmatter: ContentFrontmatter; content: string } {

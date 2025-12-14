@@ -60,15 +60,23 @@ test('content builder strips frontmatter and injects app styles', async (t) => {
   try {
     await frontendProvider.build({ workspaceRoot: workspace, env: { WEBSTIR_MODULE_MODE: 'build' }, incremental: false });
 
-    const htmlPath = path.join(workspace, 'build', 'frontend', 'pages', 'docs', 'index.html');
+    const htmlPath = path.join(workspace, 'build', 'frontend', 'pages', 'docs', 'readme', 'index.html');
     assert.equal(fssync.existsSync(htmlPath), true, `expected ${htmlPath}`);
 
     const html = await fs.readFile(htmlPath, 'utf8');
     assert.ok(!html.includes('title: Content pipeline'), 'frontmatter should not be rendered');
     assert.ok(html.includes('<article>'), 'expected markdown wrapped in <article>');
     assert.ok(html.includes('href="/app/app.css"'), 'expected app.css link injected');
+
+    const navPath = path.join(workspace, 'build', 'frontend', 'docs-nav.json');
+    const searchPath = path.join(workspace, 'build', 'frontend', 'docs-search.json');
+    assert.equal(fssync.existsSync(navPath), true, `expected ${navPath}`);
+    assert.equal(fssync.existsSync(searchPath), true, `expected ${searchPath}`);
+
+    const nav = JSON.parse(await fs.readFile(navPath, 'utf8'));
+    assert.ok(Array.isArray(nav) && nav.length > 0, 'expected docs-nav.json to contain entries');
+    assert.ok(nav.some((entry) => entry.path === '/docs/readme/'), 'expected docs-nav.json to include /docs/readme/');
   } finally {
     await fs.rm(workspace, { recursive: true, force: true });
   }
 });
-
