@@ -70,7 +70,8 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
     for (const relative of files) {
         const sourcePath = path.join(contentRoot, relative);
         const markdown = await readFile(sourcePath);
-        const htmlBody = rewriteMarkdownLinks(await marked.parse(markdown));
+        const { frontmatter, content } = extractFrontmatter(markdown);
+        const htmlBody = rewriteMarkdownLinks(await marked.parse(content));
 
         const parsed = path.parse(relative);
         const segments: string[] = ['docs'];
@@ -85,9 +86,9 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
         }
 
         const pagePath = path.join(...segments);
-        const pageNameForTitle = segments[segments.length - 1] ?? 'docs';
+        const pageTitle = resolveTitle(frontmatter, content, segments);
 
-        const mergedHtml = mergeContentIntoTemplate(templateHtml, pageNameForTitle, htmlBody);
+        const mergedHtml = mergeContentIntoTemplate(templateHtml, pageTitle, htmlBody);
 
         // Write to build (folder index)
         const targetDir = path.join(config.paths.build.frontend, FOLDERS.pages, pagePath);
@@ -291,12 +292,29 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
         throw new Error('Base application template for content pages must include <head> and <main> elements.');
     }
 
-    // Best-effort: ensure the document has a title for the content page.
+    // Ensure content pages load the shared app styles.
+    const cssHref = `/${FOLDERS.app}/app.css`;
+    const existingStylesheet =
+        head.find(`link[rel="stylesheet"][href="${cssHref}"]`).first().length > 0
+        || head.find('link[rel="stylesheet"]').toArray().some((element) => {
+            const href = document(element).attr('href');
+            return typeof href === 'string' && href.includes('/app/app.css');
+        });
+    if (!existingStylesheet) {
+        head.append(`<link rel="stylesheet" href="${cssHref}" />`);
+    }
+
+    // Best-effort: ensure the document has a sensible title for the content page.
     const title = head.find('title').first();
     if (title.length === 0) {
         head.append(`<title>${escapeHtml(pageName)}</title>`);
     } else if (!title.text().trim()) {
         title.text(pageName);
+    } else {
+        const baseTitle = title.text().trim();
+        if (!baseTitle.includes(pageName)) {
+            title.text(`${pageName} – ${baseTitle}`);
+        }
     }
 
     main.html(`<article>${bodyHtml}</article>`);
