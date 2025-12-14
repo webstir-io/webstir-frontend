@@ -194,7 +194,7 @@ function injectOptInScripts(html: string, enable: EnableFlags | undefined, pageD
         const hasHelper = document('script[data-webstir="seamless-nav"]').length > 0;
         if (!hasHelper) {
             document('head').append(
-                `<script type="module" data-webstir="seamless-nav" src="/app/seamlessNav.js"></script>`
+                `<script type="module" data-webstir="seamless-nav" src="/seamlessNav.js"></script>`
             );
         }
     }

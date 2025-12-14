@@ -137,6 +137,11 @@ async function copyRuntimeScripts(
 
         const source = path.join(config.paths.src.app, script.name);
         if (!(await pathExists(source))) {
+            if (script.name === 'seamlessNav.js') {
+                throw new Error(
+                    `seamless-nav is enabled but the helper script is missing: ${source}. Run 'webstir enable seamless-nav' or create the file.`
+                );
+            }
             continue;
         }
 

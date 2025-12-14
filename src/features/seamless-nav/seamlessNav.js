@@ -2,9 +2,9 @@
  * Minimal PJAX-style navigation: swaps the <main> content, updates title/URL,
  * and restores scroll/focus. Use data-seamless on links to opt in.
  */
-export function enableSeamlessNav(): void {
+export function enableSeamlessNav() {
     document.addEventListener('click', async (event) => {
-        const target = event.target as EventTarget | null;
+        const target = event.target;
         if (!(target instanceof Element)) {
             return;
         }
@@ -24,18 +24,53 @@ export function enableSeamlessNav(): void {
         }
 
         event.preventDefault();
-        await navigateSeamlessly(link.href);
+        await renderUrl(link.href, { pushHistory: true });
+    });
+
+    window.addEventListener('popstate', async () => {
+        await renderUrl(window.location.href, { pushHistory: false });
     });
 }
 
-async function navigateSeamlessly(url: string): Promise<void> {
-    const response = await fetch(url, { headers: { 'X-Webstir-Seamless': '1' } });
+let activeRequestId = 0;
+let activeController = null;
+
+async function renderUrl(url, { pushHistory }) {
+    activeRequestId += 1;
+    const requestId = activeRequestId;
+
+    if (activeController) {
+        activeController.abort();
+    }
+
+    const controller = new AbortController();
+    activeController = controller;
+
+    let response;
+    try {
+        response = await fetch(url, {
+            headers: { 'X-Webstir-Seamless': '1' },
+            signal: controller.signal
+        });
+    } catch {
+        if (controller.signal.aborted) {
+            return;
+        }
+
+        window.location.href = url;
+        return;
+    }
+
     if (!response.ok) {
         window.location.href = url;
         return;
     }
 
     const html = await response.text();
+    if (requestId !== activeRequestId) {
+        return;
+    }
+
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
 
@@ -50,10 +85,16 @@ async function navigateSeamlessly(url: string): Promise<void> {
         document.title = newTitle.textContent;
     }
 
-    window.history.pushState({}, '', url);
+    if (pushHistory) {
+        window.history.pushState({}, '', url);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
     const focusTarget = document.querySelector('[autofocus]');
     if (focusTarget instanceof HTMLElement) {
         focusTarget.focus();
     }
+
+    window.dispatchEvent(new CustomEvent('webstir:seamless-nav', { detail: { url } }));
 }
+
+enableSeamlessNav();
