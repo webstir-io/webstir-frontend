@@ -157,6 +157,12 @@ async function collectContentManifests(
         const { frontmatter, content } = extractFrontmatter(markdown);
 
         const segments = resolveDocsSegments(relative);
+        const parsed = path.parse(relative);
+        const section =
+            parsed.dir && parsed.dir.trim().length > 0
+            ? parsed.dir.split(path.sep)[0]
+            : 'General';
+
         const href = '/' + segments.join('/') + '/';
         const title = resolveTitle(frontmatter, content, segments);
         const textContent = await extractPlainTextFromMarkdown(content);
@@ -167,7 +173,6 @@ async function collectContentManifests(
         const excerpt =
             baseExcerpt.length > 240 ? `${baseExcerpt.slice(0, 240).trimEnd()}…` : baseExcerpt;
 
-        const section = segments.length > 1 ? segments[1] : 'docs';
         const order = frontmatter.order;
 
         navEntries.push({
@@ -348,6 +353,18 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
         head.append(`<link rel="stylesheet" href="${cssHref}" />`);
     }
 
+    // Ensure docs pages load the docs layout styles.
+    const docsCssHref = `/docs/index.css`;
+    const existingDocsStylesheet =
+        head.find(`link[rel="stylesheet"][href="${docsCssHref}"]`).first().length > 0
+        || head.find('link[rel="stylesheet"]').toArray().some((element) => {
+            const href = document(element).attr('href');
+            return typeof href === 'string' && href.includes('/docs/index.css');
+        });
+    if (!existingDocsStylesheet) {
+        head.append(`<link rel="stylesheet" href="${docsCssHref}" />`);
+    }
+
     // Best-effort: ensure the document has a sensible title for the content page.
     const title = head.find('title').first();
     if (title.length === 0) {
@@ -361,7 +378,31 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
         }
     }
 
-    main.html(`<article>${bodyHtml}</article>`);
+    const docsLayoutHtml = [
+        '<section class="docs-layout">',
+        '  <div class="container docs-layout__inner">',
+        '    <aside class="docs-sidebar" aria-label="Docs navigation">',
+        '      <div class="docs-sidebar__search">',
+        '        <label class="sr-only" for="docs-search">Search docs</label>',
+        '        <input id="docs-search" type="search" placeholder="Search docs…" autocomplete="off" />',
+        '        <div id="docs-results" class="docs-results" hidden></div>',
+        '      </div>',
+        '      <div class="docs-sidebar__header">',
+        '        <a class="docs-sidebar__title" href="/docs/">Docs</a>',
+        '      </div>',
+        '      <nav class="docs-nav" aria-label="Docs pages">',
+        '        <ul id="docs-links" class="docs-links"></ul>',
+        '      </nav>',
+        '    </aside>',
+        '    <div class="docs-main">',
+        `      <article class="docs-article">${bodyHtml}</article>`,
+        '    </div>',
+        '  </div>',
+        '</section>',
+        '<script type="module" src="/docs/index.js"></script>'
+    ].join('\n');
+
+    main.html(docsLayoutHtml);
 
     return document.root().html() ?? '';
 }
