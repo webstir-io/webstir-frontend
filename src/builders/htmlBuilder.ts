@@ -38,7 +38,11 @@ async function buildHtml(context: BuilderContext): Promise<void> {
     const { config } = context;
     if (!shouldProcess(context, [
         { directory: config.paths.src.pages, extensions: [EXTENSIONS.html] },
-        { directory: config.paths.src.app, extensions: [EXTENSIONS.html] }
+        { directory: config.paths.src.pages, extensions: [EXTENSIONS.ts, EXTENSIONS.js, '.tsx', '.jsx'] },
+        { directory: config.paths.src.app, extensions: [EXTENSIONS.html, EXTENSIONS.js] }
+        ,
+        // `webstir enable ...` modifies package.json and can change which opt-in scripts should be injected.
+        { directory: config.paths.workspace, extensions: ['.json'] }
     ])) {
         return;
     }
@@ -78,7 +82,7 @@ async function buildHtml(context: BuilderContext): Promise<void> {
             validatePageFragment(fragment, sourceHtmlPath);
 
             const mergedHtml = mergeTemplates(templateHtml, fragment);
-            const mergedWithScripts = injectOptInScripts(mergedHtml, context.enable, page.directory, sourceHtmlPath);
+            const mergedWithScripts = injectOptInScripts(mergedHtml, context.enable, page.name, page.directory, sourceHtmlPath);
             const targetPath = path.join(targetDir, path.basename(relativeHtml));
             await writeFile(targetPath, mergedWithScripts);
         }
@@ -163,17 +167,25 @@ function mergeTemplates(appHtml: string, pageHtml: string): string {
     return app.root().html() ?? '';
 }
 
-function injectOptInScripts(html: string, enable: EnableFlags | undefined, pageDir: string, sourceHtmlPath: string): string {
+function injectOptInScripts(
+    html: string,
+    enable: EnableFlags | undefined,
+    pageName: string,
+    pageDir: string,
+    sourceHtmlPath: string
+): string {
     if (!enable) {
         return html;
     }
 
     const document = load(html);
 
+    rewritePageRelativeAssets(document, pageName);
+
     if (enable.spa) {
-        const existing = document(`script[src="${FILES.index}${EXTENSIONS.js}"]`);
+        const existing = document(`script[src="/${FOLDERS.pages}/${pageName}/${FILES.index}${EXTENSIONS.js}"]`);
         if (existing.length === 0) {
-            document('head').append(`<script type="module" src="${FILES.index}${EXTENSIONS.js}"></script>`);
+            document('head').append(`<script type="module" src="/${FOLDERS.pages}/${pageName}/${FILES.index}${EXTENSIONS.js}"></script>`);
         }
     }
 
@@ -184,9 +196,9 @@ function injectOptInScripts(html: string, enable: EnableFlags | undefined, pageD
     const pageScriptExists = [tsCandidate, tsxCandidate, jsCandidate, jsxCandidate]
         .some(candidate => fs.existsSync(candidate));
     if (pageScriptExists) {
-        const hasScript = document(`script[src="${FILES.index}${EXTENSIONS.js}"]`).length > 0;
+        const hasScript = document(`script[src="/${FOLDERS.pages}/${pageName}/${FILES.index}${EXTENSIONS.js}"]`).length > 0;
         if (!hasScript) {
-            document('head').append(`<script type="module" src="${FILES.index}${EXTENSIONS.js}"></script>`);
+            document('head').append(`<script type="module" src="/${FOLDERS.pages}/${pageName}/${FILES.index}${EXTENSIONS.js}"></script>`);
         }
     }
 
@@ -200,6 +212,28 @@ function injectOptInScripts(html: string, enable: EnableFlags | undefined, pageD
     }
 
     return document.root().html() ?? html;
+}
+
+function rewritePageRelativeAssets(document: CheerioAPI, pageName: string): void {
+    const pagePrefix = `/${FOLDERS.pages}/${pageName}/`;
+
+    document('link[rel="stylesheet"]').each((_, element) => {
+        const node = document(element);
+        const href = node.attr('href');
+        if (!href || href.startsWith('/') || href.startsWith('http:') || href.startsWith('https:') || href.startsWith('data:')) {
+            return;
+        }
+        node.attr('href', `${pagePrefix}${href}`);
+    });
+
+    document('script[src]').each((_, element) => {
+        const node = document(element);
+        const src = node.attr('src');
+        if (!src || src.startsWith('/') || src.startsWith('http:') || src.startsWith('https:') || src.startsWith('data:')) {
+            return;
+        }
+        node.attr('src', `${pagePrefix}${src}`);
+    });
 }
 
 async function rewriteForPublish(
