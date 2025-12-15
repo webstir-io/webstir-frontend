@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { build as esbuild } from 'esbuild';
 import { FOLDERS, FILES, EXTENSIONS } from '../core/constants.js';
 import type { Builder, BuilderContext } from './types.js';
@@ -10,6 +11,8 @@ import { shouldProcess } from '../utils/changedFile.js';
 import { findPageFromChangedFile } from '../utils/pathMatch.js';
 
 const ENTRY_EXTENSIONS = ['.ts', '.tsx', '.js'];
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = path.resolve(MODULE_DIR, '..', '..');
 
 export function createJavaScriptBuilder(context: BuilderContext): Builder {
     return {
@@ -56,7 +59,7 @@ async function bundleJavaScript(context: BuilderContext, isProduction: boolean):
     }
 
     // Always copy dev runtime scripts in dev builds to support HMR/refresh even when no page JS exists.
-    if (!isProduction || context.enable?.seamlessNav) {
+    if (!isProduction || context.enable?.clientNav) {
         await copyRuntimeScripts(config, context.enable, isProduction);
     }
 }
@@ -127,7 +130,7 @@ async function copyRuntimeScripts(
         // Always copy dev runtime in dev builds to support live reload, even if no page JS exists.
         { name: FILES.refreshJs, copyToDist: false, required: !isProduction },
         { name: FILES.hmrJs, copyToDist: false, required: !isProduction },
-        { name: 'seamlessNav.js', copyToDist: true, required: enable?.seamlessNav === true }
+        { name: 'clientNav.js', copyToDist: true, required: enable?.clientNav === true }
     ];
 
     for (const script of scripts) {
@@ -135,11 +138,14 @@ async function copyRuntimeScripts(
             continue;
         }
 
-        const source = path.join(config.paths.src.app, script.name);
+        const source =
+            script.name === 'clientNav.js'
+            ? await resolveClientNavSource(config)
+            : path.join(config.paths.src.app, script.name);
         if (!(await pathExists(source))) {
-            if (script.name === 'seamlessNav.js') {
+            if (script.name === 'clientNav.js') {
                 throw new Error(
-                    `seamless-nav is enabled but the helper script is missing: ${source}. Run 'webstir enable seamless-nav' or create the file.`
+                    `client-nav is enabled but the helper script is missing. Run 'webstir enable client-nav' or add src/frontend/app/clientNav.js.`
                 );
             }
             continue;
@@ -155,6 +161,20 @@ async function copyRuntimeScripts(
             await copy(source, distDestination);
         }
     }
+}
+
+async function resolveClientNavSource(config: BuilderContext['config']): Promise<string> {
+    const workspaceSource = path.join(config.paths.src.app, 'clientNav.js');
+    if (await pathExists(workspaceSource)) {
+        return workspaceSource;
+    }
+
+    const bundledSource = path.join(PACKAGE_ROOT, 'src', 'features', 'client-nav', 'clientNav.js');
+    if (await pathExists(bundledSource)) {
+        return bundledSource;
+    }
+
+    return workspaceSource;
 }
 
 async function resolveEntryPoint(pageDirectory: string): Promise<string | null> {

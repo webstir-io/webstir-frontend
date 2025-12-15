@@ -190,11 +190,11 @@ function injectOptInScripts(html: string, enable: EnableFlags | undefined, pageD
         }
     }
 
-    if (enable.seamlessNav) {
-        const hasHelper = document('script[data-webstir="seamless-nav"]').length > 0;
+    if (enable.clientNav) {
+        const hasHelper = document('script[data-webstir="client-nav"]').length > 0;
         if (!hasHelper) {
             document('head').append(
-                `<script type="module" data-webstir="seamless-nav" src="/seamlessNav.js"></script>`
+                `<script type="module" data-webstir="client-nav" src="/clientNav.js"></script>`
             );
         }
     }

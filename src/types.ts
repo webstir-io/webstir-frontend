@@ -15,7 +15,7 @@ export interface FrontendConfig {
 
 export interface EnableFlags {
     readonly spa?: boolean;
-    readonly seamlessNav?: boolean;
+    readonly clientNav?: boolean;
     readonly backend?: boolean;
 }
 

@@ -1,8 +1,12 @@
 /**
  * Minimal PJAX-style navigation: swaps the <main> content, updates title/URL,
- * and restores scroll/focus. Use data-seamless on links to opt in.
+ * and restores scroll/focus.
+ *
+ * Opt out per-link with:
+ * - data-no-client-nav
+ * - data-client-nav="off"
  */
-export function enableSeamlessNav() {
+export function enableClientNav() {
     document.addEventListener('click', async (event) => {
         const target = event.target;
         if (!(target instanceof Element)) {
@@ -12,14 +16,30 @@ export function enableSeamlessNav() {
             return;
         }
 
-        const link = target.closest('a[data-seamless]');
+        const link = target.closest('a');
         if (!link || !(link instanceof HTMLAnchorElement)) {
+            return;
+        }
+
+        const setting = link.getAttribute('data-client-nav');
+        const optOut = link.hasAttribute('data-no-client-nav')
+            || setting === 'off'
+            || setting === 'false';
+        if (optOut) {
             return;
         }
 
         const isExternal = link.origin !== window.location.origin;
         const opensInNewTab = link.getAttribute('target') === '_blank';
-        if (isExternal || opensInNewTab) {
+        const isDownload = link.hasAttribute('download');
+        if (isExternal || opensInNewTab || isDownload) {
+            return;
+        }
+
+        const isSameDocumentAnchor = link.hash
+            && link.pathname === window.location.pathname
+            && link.search === window.location.search;
+        if (isSameDocumentAnchor) {
             return;
         }
 
@@ -49,7 +69,7 @@ async function renderUrl(url, { pushHistory }) {
     let response;
     try {
         response = await fetch(url, {
-            headers: { 'X-Webstir-Seamless': '1' },
+            headers: { 'X-Webstir-Client-Nav': '1' },
             signal: controller.signal
         });
     } catch {
@@ -94,7 +114,7 @@ async function renderUrl(url, { pushHistory }) {
         focusTarget.focus();
     }
 
-    window.dispatchEvent(new CustomEvent('webstir:seamless-nav', { detail: { url } }));
+    window.dispatchEvent(new CustomEvent('webstir:client-nav', { detail: { url } }));
 }
 
-enableSeamlessNav();
+enableClientNav();

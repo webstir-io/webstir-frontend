@@ -32,7 +32,7 @@ async function createWorkspace() {
   return root;
 }
 
-async function createWorkspaceWithSeamlessNav() {
+async function createWorkspaceWithClientNav() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'webstir-frontend-workspace-'));
   const appDir = path.join(root, 'src', 'frontend', 'app');
   const pageDir = path.join(root, 'src', 'frontend', 'pages', 'home');
@@ -45,14 +45,13 @@ async function createWorkspaceWithSeamlessNav() {
     webstir: {
       mode: 'ssg',
       enable: {
-        seamlessNav: true
+        clientNav: true
       }
     }
   };
   await fs.writeFile(path.join(root, 'package.json'), JSON.stringify(pkg, null, 2), 'utf8');
 
   await fs.writeFile(path.join(appDir, 'app.html'), '<!DOCTYPE html><html><head><title>App</title></head><body><main></main></body></html>', 'utf8');
-  await fs.writeFile(path.join(appDir, 'seamlessNav.js'), 'console.info("seamless");', 'utf8');
   await fs.writeFile(path.join(pageDir, 'index.html'), '<head></head><main><section>Home</section></main>', 'utf8');
 
   return root;
@@ -94,18 +93,21 @@ test('frontend provider publish produces dist assets and preserves entry in mani
   assert.ok(publishResult.manifest.entryPoints.some((e) => e.endsWith('pages/home/index.js')));
 });
 
-test('enable.seamlessNav copies helper and injects script for ssg', async (t) => {
+test('enable.clientNav copies helper and injects script for ssg', async (t) => {
   const frontendProvider = await loadProviderOrSkip(t);
   if (!frontendProvider) return; // skip
-  const workspace = await createWorkspaceWithSeamlessNav();
+  const workspace = await createWorkspaceWithClientNav();
 
   await frontendProvider.build({ workspaceRoot: workspace, env: { WEBSTIR_MODULE_MODE: 'build' }, incremental: false });
   await frontendProvider.build({ workspaceRoot: workspace, env: { WEBSTIR_MODULE_MODE: 'publish' }, incremental: false });
 
-  const distSeamless = path.join(workspace, 'dist', 'frontend', 'seamlessNav.js');
-  assert.equal(fssync.existsSync(distSeamless), true, 'expected dist/frontend/seamlessNav.js');
+  const distClientNav = path.join(workspace, 'dist', 'frontend', 'clientNav.js');
+  assert.equal(fssync.existsSync(distClientNav), true, 'expected dist/frontend/clientNav.js');
+
+  const helper = await fs.readFile(distClientNav, 'utf8');
+  assert.ok(helper.includes('webstir:client-nav'), 'expected built-in client-nav helper');
 
   const distHtml = await fs.readFile(path.join(workspace, 'dist', 'frontend', 'pages', 'home', 'index.html'), 'utf8');
-  assert.ok(distHtml.includes('seamlessNav.js'), 'expected seamless-nav script injected');
+  assert.ok(distHtml.includes('clientNav.js'), 'expected client-nav script injected');
   assert.ok(!distHtml.includes('index.js'), 'should not inject page index.js when none exists');
 });
