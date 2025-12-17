@@ -5,8 +5,7 @@ import fssync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { applySsgRouting } from '../dist/ssg.js';
-import { generateSsgViewData } from '../dist/ssgViews.js';
+import { applySsgRouting, generateSsgViewData } from '../dist/modes/ssg/index.js';
 
 async function createWorkspace() {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'webstir-frontend-ssg-defaults-'));
