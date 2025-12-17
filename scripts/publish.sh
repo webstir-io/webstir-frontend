@@ -59,7 +59,7 @@ main() {
   PRE_VERSION_REF="$(git rev-parse HEAD)"
 
   echo "› npm version $bump"
-  npm version "$bump" -m "chore(release): %s [skip ci]"
+  npm version "$bump" -m "chore(release): %s [skip webstir-ci]"
 
   local pkg_name
   local pkg_version
