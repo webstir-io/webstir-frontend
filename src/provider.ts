@@ -18,9 +18,7 @@ import type { PipelineMode } from './pipeline.js';
 import { prepareWorkspaceConfig } from './config/setup.js';
 import type { FrontendConfig } from './types.js';
 import { readJson } from './utils/fs.js';
-import { applySsgRouting } from './ssg.js';
-import { generateSsgViewData } from './ssgViews.js';
-import { assertNoSsgRoutes } from './ssgValidation.js';
+import { applySsgRouting, assertNoSsgRoutes, generateSsgViewData } from './modes/ssg/index.js';
 
 interface PackageJson {
     readonly name: string;
@@ -103,6 +101,7 @@ interface WorkspaceEnableFlags {
     readonly spa?: boolean;
     readonly clientNav?: boolean;
     readonly backend?: boolean;
+    readonly search?: boolean;
 }
 
 interface WorkspacePackageJson {

@@ -2,10 +2,15 @@ import path from 'node:path';
 import { glob } from 'glob';
 import { marked } from 'marked';
 import { load } from 'cheerio';
-import { FOLDERS, FILES, FILE_NAMES } from '../core/constants.js';
-import { ensureDir, pathExists, readFile, writeFile } from '../utils/fs.js';
+import type { Cheerio } from 'cheerio';
+import type { AnyNode } from 'domhandler';
+import hljs from 'highlight.js/lib/common';
+import { FOLDERS, FILES, FILE_NAMES, EXTENSIONS } from '../core/constants.js';
+import { ensureDir, pathExists, readFile, readJson, remove, writeFile } from '../utils/fs.js';
 import type { Builder, BuilderContext } from './types.js';
 import { shouldProcess } from '../utils/changedFile.js';
+import { getPageDirectories } from '../core/pages.js';
+import { readPageManifest, readSharedAssets } from '../assets/assetManifest.js';
 
 interface ContentFrontmatter {
     title?: string;
@@ -20,6 +25,37 @@ interface DocsNavEntry {
     readonly order?: number;
 }
 
+interface SidebarOverrideEntry {
+    readonly path: string;
+    readonly title?: string;
+    readonly section?: string;
+    readonly order?: number;
+    readonly hidden?: boolean;
+}
+
+type SidebarOverrideFile =
+    | { readonly pages?: readonly SidebarOverrideEntry[] }
+    | readonly SidebarOverrideEntry[]
+    | Record<string, Omit<SidebarOverrideEntry, 'path'> & { readonly path?: string }>;
+
+interface SearchEntry {
+    readonly path: string;
+    readonly title: string;
+    readonly description?: string;
+    readonly headings: readonly string[];
+    readonly excerpt: string;
+    readonly kind: 'docs' | 'page';
+}
+
+interface RenderedContentPage {
+    readonly href: string;
+    readonly outputDir: string;
+    readonly outputPath: string;
+    readonly html: string;
+    readonly headingIds: ReadonlySet<string>;
+    readonly sourcePath: string;
+}
+
 export function createContentBuilder(context: BuilderContext): Builder {
     return {
         name: 'content',
@@ -28,6 +64,7 @@ export function createContentBuilder(context: BuilderContext): Builder {
             await buildContentManifests(context);
         },
         async publish(): Promise<void> {
+            await publishContentPages(context);
             await publishContentManifests(context);
         }
     };
@@ -62,29 +99,153 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
     const templateHtml = await readFile(appTemplatePath);
     validateAppTemplate(templateHtml, appTemplatePath);
 
+    await removeStaleContentOutputs(context, files);
+
     for (const relative of files) {
         const sourcePath = path.join(contentRoot, relative);
         const markdown = await readFile(sourcePath);
         const { frontmatter, content } = extractFrontmatter(markdown);
-        const htmlBody = rewriteMarkdownLinks(await marked.parse(content));
+        const htmlBody = (await renderMarkdownDoc(content)).html;
 
         const segments = resolveDocsSegments(relative);
         const pagePath = path.join(...segments);
         const pageTitle = resolveTitle(frontmatter, content, segments);
 
-        const mergedHtml = mergeContentIntoTemplate(templateHtml, pageTitle, htmlBody);
+        const mergedHtml = mergeContentIntoTemplate(templateHtml, pageTitle, htmlBody, frontmatter.description);
+        const mergedWithOptIn = injectGlobalOptInScripts(mergedHtml, context.enable);
 
         // Write to build (folder index)
         const targetDir = path.join(config.paths.build.frontend, FOLDERS.pages, pagePath);
         await ensureDir(targetDir);
         const targetPath = path.join(targetDir, FILES.indexHtml);
-        await writeFile(targetPath, mergedHtml);
+        await writeFile(targetPath, mergedWithOptIn);
+    }
+}
 
-        // Mirror to dist so static hosting uses pre-rendered docs too
+async function publishContentPages(context: BuilderContext): Promise<void> {
+    const { config } = context;
+    const contentRoot = config.paths.src.content;
+
+    if (!(await pathExists(contentRoot))) {
+        return;
+    }
+
+    const files = await glob('**/*.md', {
+        cwd: contentRoot,
+        nodir: true
+    });
+
+    if (files.length === 0) {
+        return;
+    }
+
+    const appTemplatePath = path.join(config.paths.src.app, FILE_NAMES.htmlAppTemplate);
+    if (!(await pathExists(appTemplatePath))) {
+        throw new Error(`Base application HTML file not found for content pages: ${appTemplatePath}`);
+    }
+
+    const templateHtml = await readFile(appTemplatePath);
+    validateAppTemplate(templateHtml, appTemplatePath);
+
+    await removeStaleContentOutputsForRoots([config.paths.dist.frontend], files);
+
+    const shared = await readSharedAssets(config.paths.dist.frontend);
+    const docsManifest = await readPageManifest(config.paths.dist.frontend, 'docs');
+
+    if (!docsManifest.css || !docsManifest.js) {
+        throw new Error(
+            "Content pages require the docs hub assets. Ensure 'src/frontend/pages/docs/index.css' and 'src/frontend/pages/docs/index.(ts|js)' exist, then re-run publish."
+        );
+    }
+
+    const renderedPages: RenderedContentPage[] = [];
+
+    for (const relative of files) {
+        const sourcePath = path.join(contentRoot, relative);
+        const markdown = await readFile(sourcePath);
+        const { frontmatter, content } = extractFrontmatter(markdown);
+
+        const segments = resolveDocsSegments(relative);
+        const pagePath = path.join(...segments);
+        const href = '/' + segments.join('/') + '/';
+        const pageTitle = resolveTitle(frontmatter, content, segments);
+
+        const rendered = await renderMarkdownDoc(content);
+        const htmlBody = rendered.html;
+
+        const mergedHtml = mergeContentIntoTemplate(templateHtml, pageTitle, htmlBody, frontmatter.description);
+        const mergedWithOptIn = injectGlobalOptInScripts(mergedHtml, context.enable);
+        const rewritten = await rewriteContentForPublish(mergedWithOptIn, shared, docsManifest);
+
         const distDir = path.join(config.paths.dist.frontend, FOLDERS.pages, pagePath);
-        await ensureDir(distDir);
         const distPath = path.join(distDir, FILES.indexHtml);
-        await writeFile(distPath, mergedHtml);
+
+        renderedPages.push({
+            href,
+            outputDir: distDir,
+            outputPath: distPath,
+            html: rewritten,
+            headingIds: rendered.headingIds,
+            sourcePath
+        });
+    }
+
+    validateRenderedContentPages(renderedPages);
+
+    for (const page of renderedPages) {
+        await ensureDir(page.outputDir);
+        await writeFile(page.outputPath, page.html);
+    }
+}
+
+async function removeStaleContentOutputs(context: BuilderContext, contentFiles: readonly string[]): Promise<void> {
+    await removeStaleContentOutputsForRoots([context.config.paths.build.frontend], contentFiles);
+}
+
+async function removeStaleContentOutputsForRoots(outputRoots: readonly string[], contentFiles: readonly string[]): Promise<void> {
+    const expected = new Set<string>();
+    for (const relative of contentFiles) {
+        const segments = resolveDocsSegments(relative);
+        expected.add(path.join(...segments.slice(1)));
+    }
+
+    for (const outputRoot of outputRoots) {
+        await removeStaleContentOutputsForRoot(path.join(outputRoot, FOLDERS.pages, 'docs'), expected);
+    }
+}
+
+async function removeStaleContentOutputsForRoot(docsRoot: string, expected: ReadonlySet<string>): Promise<void> {
+    if (!(await pathExists(docsRoot))) {
+        return;
+    }
+
+    const candidateIndexes = await glob('**/index.html', {
+        cwd: docsRoot,
+        nodir: true
+    });
+
+    for (const relativeIndex of candidateIndexes) {
+        // Keep the docs hub at `/docs/` (pages/docs/index.html).
+        if (relativeIndex === FILES.indexHtml) {
+            continue;
+        }
+
+        const pageDir = path.dirname(relativeIndex);
+        if (!pageDir || pageDir === '.' || expected.has(pageDir)) {
+            continue;
+        }
+
+        const absoluteIndex = path.join(docsRoot, relativeIndex);
+        const html = await readFile(absoluteIndex);
+
+        // Only remove pages that were generated by the content pipeline (avoid deleting user-owned pages under /docs).
+        const looksLikeContentOutput = html.includes('class="docs-article"')
+            && html.includes(`/${FOLDERS.pages}/docs/`);
+        if (!looksLikeContentOutput) {
+            continue;
+        }
+
+        await remove(path.join(docsRoot, pageDir));
     }
 }
 
@@ -93,10 +254,21 @@ async function buildContentManifests(context: BuilderContext): Promise<void> {
     const contentRoot = config.paths.src.content;
 
     if (!(await pathExists(contentRoot))) {
+        // Still allow search.json to be created from regular pages.
+        if (context.enable?.search === true) {
+            const pageEntries = await collectPageSearchEntries(context);
+            if (pageEntries.length > 0) {
+                await writeSearchManifest([config.paths.build.frontend], pageEntries);
+            }
+        }
         return;
     }
 
-    if (!shouldProcess(context, [{ directory: contentRoot, extensions: ['.md'] }])) {
+    if (!shouldProcess(context, [
+        { directory: contentRoot, extensions: ['.md'] },
+        // `webstir enable search` updates package.json and should emit the index immediately.
+        { directory: config.paths.workspace, extensions: ['.json'] }
+    ])) {
         return;
     }
 
@@ -105,28 +277,48 @@ async function buildContentManifests(context: BuilderContext): Promise<void> {
         return;
     }
 
-    await writeContentNavManifest([config.paths.build.frontend, config.paths.dist.frontend], navEntries);
+    await writeContentNavManifest([config.paths.build.frontend], navEntries);
+
+    if (context.enable?.search === true) {
+        const [docEntries, pageEntries] = await Promise.all([
+            collectContentSearchEntries(context),
+            collectPageSearchEntries(context)
+        ]);
+        const searchEntries = [...docEntries, ...pageEntries];
+        if (searchEntries.length > 0) {
+            await writeSearchManifest([config.paths.build.frontend], searchEntries);
+        }
+    }
 }
 
 async function publishContentManifests(context: BuilderContext): Promise<void> {
     const { config } = context;
     const contentRoot = config.paths.src.content;
 
-    if (!(await pathExists(contentRoot))) {
-        return;
+    const hasContent = await pathExists(contentRoot);
+
+    const navEntries = hasContent ? await collectContentManifests(context) : [];
+
+    if (navEntries.length > 0) {
+        await writeContentNavManifest([config.paths.dist.frontend], navEntries);
     }
 
-    const navEntries = await collectContentManifests(context);
-    if (navEntries.length === 0) {
-        return;
+    if (context.enable?.search === true) {
+        const [docEntries, pageEntries] = await Promise.all([
+            hasContent ? collectContentSearchEntries(context) : Promise.resolve([]),
+            collectPageSearchEntries(context)
+        ]);
+        const searchEntries = [...docEntries, ...pageEntries];
+        if (searchEntries.length > 0) {
+            await writeSearchManifest([config.paths.dist.frontend], searchEntries);
+        }
     }
-
-    await writeContentNavManifest([config.paths.dist.frontend], navEntries);
 }
 
 async function collectContentManifests(context: BuilderContext): Promise<DocsNavEntry[]> {
     const { config } = context;
     const contentRoot = config.paths.src.content;
+    const overrides = await loadSidebarOverrides(contentRoot);
 
     const files = await glob('**/*.md', {
         cwd: contentRoot,
@@ -149,18 +341,23 @@ async function collectContentManifests(context: BuilderContext): Promise<DocsNav
         const section =
             parsed.dir && parsed.dir.trim().length > 0
             ? parsed.dir.split(path.sep)[0]
-            : 'General';
+            : undefined;
 
         const href = '/' + segments.join('/') + '/';
         const title = resolveTitle(frontmatter, content, segments);
         const order = frontmatter.order;
 
-        navEntries.push({
+        const baseEntry: DocsNavEntry = {
             path: href,
             title,
             section,
             order
-        });
+        };
+
+        const merged = applySidebarOverride(baseEntry, overrides);
+        if (merged) {
+            navEntries.push(merged);
+        }
     }
 
     navEntries.sort((a, b) => {
@@ -191,6 +388,252 @@ async function writeContentNavManifest(
 
         await ensureDir(path.dirname(navOutputPath));
         await writeFile(navOutputPath, JSON.stringify(navEntries, undefined, 2));
+    }
+}
+
+async function collectContentSearchEntries(context: BuilderContext): Promise<SearchEntry[]> {
+    const { config } = context;
+    const contentRoot = config.paths.src.content;
+    const overrides = await loadSidebarOverrides(contentRoot);
+
+    const files = await glob('**/*.md', {
+        cwd: contentRoot,
+        nodir: true
+    });
+
+    if (files.length === 0) {
+        return [];
+    }
+
+    const entries: SearchEntry[] = [];
+
+    for (const relative of files) {
+        const sourcePath = path.join(contentRoot, relative);
+        const markdown = await readFile(sourcePath);
+        const { frontmatter, content } = extractFrontmatter(markdown);
+
+        const segments = resolveDocsSegments(relative);
+        const href = '/' + segments.join('/') + '/';
+        const rawTitle = resolveTitle(frontmatter, content, segments);
+        const title = applySidebarTitleOverride(href, rawTitle, overrides);
+        if (!title) {
+            continue;
+        }
+
+        const html = (await renderMarkdownDoc(content)).html;
+        const document = load(html);
+        const headings = document('h2, h3')
+            .toArray()
+            .map((element) => document(element).text().trim())
+            .filter((text) => text.length > 0);
+
+        const plainText = document.text().replace(/\s+/g, ' ').trim();
+        const excerpt = plainText.length > 240 ? `${plainText.slice(0, 240).trim()}…` : plainText;
+
+        entries.push({
+            path: href,
+            title,
+            description: frontmatter.description?.trim() ? frontmatter.description.trim() : undefined,
+            headings,
+            excerpt,
+            kind: 'docs'
+        });
+    }
+
+    entries.sort((a, b) => a.path.localeCompare(b.path));
+    return entries;
+}
+
+async function loadSidebarOverrides(contentRoot: string): Promise<Map<string, SidebarOverrideEntry>> {
+    const overridesPath = path.join(contentRoot, '_sidebar.json');
+    if (!(await pathExists(overridesPath))) {
+        return new Map();
+    }
+
+    const parsed = await readJson<SidebarOverrideFile>(overridesPath);
+    const map = new Map<string, SidebarOverrideEntry>();
+
+    if (!parsed) {
+        return map;
+    }
+
+    const pages = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray((parsed as { pages?: unknown }).pages)
+            ? (parsed as { pages: unknown }).pages as readonly SidebarOverrideEntry[]
+            : null;
+
+    if (pages) {
+        for (let index = 0; index < pages.length; index += 1) {
+            const entry = pages[index];
+            if (!entry || typeof entry !== 'object') {
+                continue;
+            }
+
+            const normalized = normalizeDocsOverrideHref((entry as SidebarOverrideEntry).path);
+            if (!normalized) {
+                continue;
+            }
+
+            const defaultOrder = typeof (entry as SidebarOverrideEntry).order === 'number'
+                ? (entry as SidebarOverrideEntry).order
+                : index + 1;
+
+            map.set(normalized, {
+                ...entry,
+                path: normalized,
+                order: defaultOrder
+            });
+        }
+
+        return map;
+    }
+
+    if (typeof parsed === 'object') {
+        for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+            if (!value || typeof value !== 'object') {
+                continue;
+            }
+
+            const rawPath = typeof (value as { path?: unknown }).path === 'string' ? String((value as { path?: unknown }).path) : key;
+            const normalized = normalizeDocsOverrideHref(rawPath);
+            if (!normalized) {
+                continue;
+            }
+
+            const title = typeof (value as { title?: unknown }).title === 'string' ? String((value as { title?: unknown }).title) : undefined;
+            const section = typeof (value as { section?: unknown }).section === 'string' ? String((value as { section?: unknown }).section) : undefined;
+            const hidden = typeof (value as { hidden?: unknown }).hidden === 'boolean' ? Boolean((value as { hidden?: unknown }).hidden) : undefined;
+            const orderValue = (value as { order?: unknown }).order;
+            const order = typeof orderValue === 'number' && Number.isFinite(orderValue) ? orderValue : undefined;
+
+            map.set(normalized, { path: normalized, title, section, hidden, order });
+        }
+    }
+
+    return map;
+}
+
+function applySidebarOverride(entry: DocsNavEntry, overrides: ReadonlyMap<string, SidebarOverrideEntry>): DocsNavEntry | null {
+    const key = normalizeDocsOverrideHref(entry.path);
+    const override = key ? overrides.get(key) : undefined;
+    if (!override) {
+        return entry;
+    }
+
+    if (override.hidden === true) {
+        return null;
+    }
+
+    const title = typeof override.title === 'string' && override.title.trim().length > 0 ? override.title.trim() : entry.title;
+    const section = typeof override.section === 'string' && override.section.trim().length > 0 ? override.section.trim() : entry.section;
+    const order = typeof override.order === 'number' && Number.isFinite(override.order) ? override.order : entry.order;
+
+    return {
+        path: entry.path,
+        title,
+        section,
+        order
+    };
+}
+
+function applySidebarTitleOverride(
+    href: string,
+    fallbackTitle: string,
+    overrides: ReadonlyMap<string, SidebarOverrideEntry>
+): string | null {
+    const key = normalizeDocsOverrideHref(href);
+    const override = key ? overrides.get(key) : undefined;
+    if (!override) {
+        return fallbackTitle;
+    }
+
+    if (override.hidden === true) {
+        return null;
+    }
+
+    const title = typeof override.title === 'string' && override.title.trim().length > 0 ? override.title.trim() : fallbackTitle;
+    return title;
+}
+
+function normalizeDocsOverrideHref(value: string): string | null {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    const withSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    if (!withSlash.startsWith('/docs/')) {
+        return null;
+    }
+
+    if (withSlash.endsWith('/')) {
+        return withSlash;
+    }
+
+    return `${withSlash}/`;
+}
+
+async function collectPageSearchEntries(context: BuilderContext): Promise<SearchEntry[]> {
+    const { config } = context;
+    const pages = await getPageDirectories(config.paths.src.pages);
+    if (pages.length === 0) {
+        return [];
+    }
+
+    const entries: SearchEntry[] = [];
+
+    for (const page of pages) {
+        const sourceIndex = path.join(page.directory, FILES.indexHtml);
+        if (!(await pathExists(sourceIndex))) {
+            continue;
+        }
+
+        const html = await readFile(sourceIndex);
+        const document = load(html);
+
+        const titleFromTag = document('title').first().text().trim();
+        const titleFromH1 = document('h1').first().text().trim();
+        const title = titleFromTag || titleFromH1 || toTitleCase(page.name);
+
+        const description =
+            document('meta[name="description"]').first().attr('content')?.trim()
+            || undefined;
+
+        const headings = document('h2, h3')
+            .toArray()
+            .map((element) => document(element).text().trim())
+            .filter((text) => text.length > 0);
+
+        const mainText = (document('main').first().text() || document.text()).replace(/\s+/g, ' ').trim();
+        const excerpt = mainText.length > 240 ? `${mainText.slice(0, 240).trim()}…` : mainText;
+
+        entries.push({
+            path: resolvePageHref(page.name),
+            title,
+            description,
+            headings,
+            excerpt,
+            kind: 'page'
+        });
+    }
+
+    entries.sort((a, b) => a.path.localeCompare(b.path));
+    return entries;
+}
+
+function resolvePageHref(pageName: string): string {
+    if (pageName === FOLDERS.home) {
+        return '/';
+    }
+    return `/${pageName}/`;
+}
+
+async function writeSearchManifest(outputRoots: readonly string[], entries: readonly SearchEntry[]): Promise<void> {
+    for (const outputRoot of outputRoots) {
+        const outputPath = path.join(outputRoot, 'search.json');
+        await ensureDir(path.dirname(outputPath));
+        await writeFile(outputPath, JSON.stringify(entries, undefined, 2));
     }
 }
 
@@ -295,7 +738,7 @@ function validateAppTemplate(html: string, filePath: string): void {
     }
 }
 
-function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: string): string {
+function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: string, description?: string): string {
     const document = load(appHtml);
 
     const main = document('main').first();
@@ -303,6 +746,17 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
     if (main.length === 0 || head.length === 0) {
         throw new Error('Base application template for content pages must include <head> and <main> elements.');
     }
+
+    if (description && description.trim()) {
+        const meta = head.find('meta[name="description"]').first();
+        if (meta.length > 0) {
+            meta.attr('content', description.trim());
+        } else {
+            head.append(`<meta name="description" content="${escapeHtml(description.trim())}" />`);
+        }
+    }
+    const defaultDescription = head.find('meta[name="description"]').first().attr('content')?.trim() ?? '';
+    const effectiveDescription = (description ?? '').trim() || defaultDescription;
 
     // Ensure content pages load the shared app styles.
     const cssHref = `/${FOLDERS.app}/app.css`;
@@ -340,10 +794,22 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
             title.text(`${pageName} – ${baseTitle}`);
         }
     }
+    const effectiveTitle = head.find('title').first().text().trim() || pageName;
+
+    ensureMetaProperty(head, 'og:title', effectiveTitle);
+    if (effectiveDescription) {
+        ensureMetaProperty(head, 'og:description', effectiveDescription);
+    }
+    ensureMetaProperty(head, 'og:type', 'website');
+    ensureMetaName(head, 'twitter:card', 'summary');
+    ensureMetaName(head, 'twitter:title', effectiveTitle);
+    if (effectiveDescription) {
+        ensureMetaName(head, 'twitter:description', effectiveDescription);
+    }
 
     const docsLayoutHtml = [
-        '<section class="docs-layout">',
-        '  <div class="container docs-layout__inner">',
+        '<section class="docs-layout" data-scope="docs">',
+        '  <div class="ws-container docs-layout__inner">',
         '    <aside class="docs-sidebar" aria-label="Docs navigation">',
         '      <div class="docs-sidebar__header">',
         '        <a class="docs-sidebar__title" href="/docs/">Docs</a>',
@@ -355,6 +821,12 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
         '    <div class="docs-main">',
         `      <article class="docs-article">${bodyHtml}</article>`,
         '    </div>',
+        '    <aside class="docs-toc" aria-label="On this page" hidden>',
+        '      <div class="docs-toc__title">On this page</div>',
+        '      <nav class="docs-toc__nav">',
+        '        <ul id="docs-toc" class="docs-toc__links"></ul>',
+        '      </nav>',
+        '    </aside>',
         '  </div>',
         '</section>',
         `<script type="module" src="/${FOLDERS.pages}/docs/index.js"></script>`
@@ -363,6 +835,330 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
     main.html(docsLayoutHtml);
 
     return document.root().html() ?? '';
+}
+
+function ensureMetaProperty(head: Cheerio<AnyNode>, property: string, content: string): void {
+    const escaped = escapeHtml(content);
+    const meta = head.find(`meta[property="${property}"]`).first();
+    if (meta.length > 0) {
+        meta.attr('content', escaped);
+        return;
+    }
+    head.append(`<meta property="${property}" content="${escaped}" />`);
+}
+
+function ensureMetaName(head: Cheerio<AnyNode>, name: string, content: string): void {
+    const escaped = escapeHtml(content);
+    const meta = head.find(`meta[name="${name}"]`).first();
+    if (meta.length > 0) {
+        meta.attr('content', escaped);
+        return;
+    }
+    head.append(`<meta name="${name}" content="${escaped}" />`);
+}
+
+async function renderMarkdownDoc(markdown: string): Promise<{ html: string; headingIds: ReadonlySet<string> }> {
+    const renderer = getMarkdownRenderer();
+    const expanded = await expandAdmonitions(markdown, renderer);
+    const rawHtml = await marked.parse(expanded, { renderer: renderer as any });
+    const linked = rewriteMarkdownLinks(rawHtml);
+    const { html, headingIds } = ensureHeadingIds(linked);
+    return { html, headingIds };
+}
+
+function getMarkdownRenderer(): unknown {
+    const w = globalThis as unknown as Record<string, unknown>;
+    const key = '__webstirMarkedRendererV1';
+    const existing = w[key] as unknown | undefined;
+    if (existing) {
+        return existing;
+    }
+
+    const renderer = new marked.Renderer();
+
+    // Marked v12 renderer signature is not stable in TS types; keep it permissive.
+    (renderer as unknown as { code: (code: string, infostring?: string) => string }).code = (
+        code: string,
+        infostring?: string
+    ): string => {
+        const rawLang = typeof infostring === 'string' ? infostring.trim().split(/\s+/)[0] : '';
+        const lang = rawLang ? rawLang.toLowerCase() : '';
+
+        try {
+            if (lang && hljs.getLanguage(lang)) {
+                const highlighted = hljs.highlight(code, { language: lang }).value;
+                return `<pre><code class="hljs language-${escapeHtml(lang)}">${highlighted}</code></pre>`;
+            }
+
+            const highlighted = hljs.highlightAuto(code).value;
+            return `<pre><code class="hljs">${highlighted}</code></pre>`;
+        } catch {
+            return `<pre><code>${escapeHtml(code)}</code></pre>`;
+        }
+    };
+
+    w[key] = renderer;
+    return renderer;
+}
+
+type AdmonitionKind = 'note' | 'tip' | 'info' | 'warning' | 'danger';
+
+const ADMONITION_TITLES: Record<AdmonitionKind, string> = {
+    note: 'Note',
+    tip: 'Tip',
+    info: 'Info',
+    warning: 'Warning',
+    danger: 'Danger'
+};
+
+async function expandAdmonitions(markdown: string, renderer: unknown): Promise<string> {
+    const lines = markdown.split(/\r?\n/);
+    const out: string[] = [];
+
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index] ?? '';
+        const match = line.match(/^:::\s*([A-Za-z]+)(?:\s+(.*))?\s*$/);
+        if (!match) {
+            out.push(line);
+            continue;
+        }
+
+        const kindRaw = match[1]?.toLowerCase() ?? '';
+        if (!isAdmonitionKind(kindRaw)) {
+            out.push(line);
+            continue;
+        }
+
+        const title = (match[2] ?? '').trim() || ADMONITION_TITLES[kindRaw];
+
+        const inner: string[] = [];
+        let closed = false;
+        for (index = index + 1; index < lines.length; index += 1) {
+            const innerLine = lines[index] ?? '';
+            if (innerLine.trim() === ':::') {
+                closed = true;
+                break;
+            }
+            inner.push(innerLine);
+        }
+
+        if (!closed) {
+            // Unterminated block; treat it as literal markdown.
+            out.push(line);
+            out.push(...inner);
+            break;
+        }
+
+        const bodyMarkdown = inner.join('\n').trim();
+        const bodyHtml = bodyMarkdown.length > 0 ? await marked.parse(bodyMarkdown, { renderer: renderer as any }) : '';
+
+        out.push(
+            [
+                `<aside class="docs-callout docs-callout--${kindRaw}">`,
+                `  <div class="docs-callout__title">${escapeHtml(title)}</div>`,
+                `  <div class="docs-callout__body">${bodyHtml}</div>`,
+                `</aside>`
+            ].join('\n')
+        );
+    }
+
+    return out.join('\n');
+}
+
+function isAdmonitionKind(value: string): value is AdmonitionKind {
+    return value === 'note' || value === 'tip' || value === 'info' || value === 'warning' || value === 'danger';
+}
+
+function ensureHeadingIds(html: string): { html: string; headingIds: ReadonlySet<string> } {
+    const document = load(html);
+    const used = new Set<string>();
+    const ids = new Set<string>();
+
+    const headings = document('h1, h2, h3, h4').toArray();
+    for (const element of headings) {
+        const heading = document(element);
+        const existing = heading.attr('id')?.trim();
+        if (existing) {
+            used.add(existing);
+            ids.add(existing);
+            continue;
+        }
+
+        const text = heading.text().trim();
+        const base = slugifyHeading(text) || 'section';
+        let candidate = base;
+        let counter = 2;
+        while (used.has(candidate)) {
+            candidate = `${base}-${counter}`;
+            counter += 1;
+        }
+
+        used.add(candidate);
+        ids.add(candidate);
+        heading.attr('id', candidate);
+    }
+
+    return { html: document.root().html() ?? html, headingIds: ids };
+}
+
+function slugifyHeading(value: string): string {
+    return value
+        .trim()
+        .toLowerCase()
+        .replace(/['"]/g, '')
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-');
+}
+
+function validateRenderedContentPages(pages: readonly RenderedContentPage[]): void {
+    if (pages.length === 0) {
+        return;
+    }
+
+    const headingsByHref = new Map<string, ReadonlySet<string>>(pages.map((page) => [page.href, page.headingIds]));
+    const knownHrefs = new Set<string>(pages.map((page) => page.href));
+    knownHrefs.add('/docs/');
+
+    const errors: string[] = [];
+
+    for (const page of pages) {
+        const document = load(page.html);
+        const anchors = document('.docs-article a[href]').toArray();
+
+        for (const element of anchors) {
+            const href = document(element).attr('href') ?? '';
+            if (!href) {
+                continue;
+            }
+
+            if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//')) {
+                continue;
+            }
+
+            const resolved = resolveHref(page.href, href);
+            if (!resolved) {
+                continue;
+            }
+
+            const isDocsPage =
+                resolved.pathname === '/docs'
+                || resolved.pathname === '/docs/'
+                || resolved.pathname.startsWith('/docs/');
+            if (!isDocsPage) {
+                continue;
+            }
+
+            const targetHref = normalizeDocsHref(resolved.pathname);
+            if (!knownHrefs.has(targetHref)) {
+                errors.push(`${page.sourcePath}: broken docs link '${href}' → '${targetHref}'`);
+                continue;
+            }
+
+            const hash = resolved.hash.startsWith('#') ? resolved.hash.slice(1) : resolved.hash;
+            if (!hash) {
+                continue;
+            }
+
+            const targetHeadings = headingsByHref.get(targetHref);
+            if (!targetHeadings) {
+                continue;
+            }
+
+            if (!targetHeadings.has(hash)) {
+                errors.push(`${page.sourcePath}: broken anchor '${href}' (missing '#${hash}' on ${targetHref})`);
+            }
+        }
+    }
+
+    if (errors.length === 0) {
+        return;
+    }
+
+    const preview = errors.slice(0, 12).join('\n');
+    const suffix = errors.length > 12 ? `\n… and ${errors.length - 12} more.` : '';
+    throw new Error(`Markdown content contains broken internal links/anchors:\n${preview}${suffix}`);
+}
+
+function resolveHref(baseHref: string, href: string): URL | null {
+    try {
+        const base = baseHref.endsWith('/') ? baseHref : `${baseHref}/`;
+        return new URL(href, `http://webstir.local${base}`);
+    } catch {
+        return null;
+    }
+}
+
+function normalizeDocsHref(pathname: string): string {
+    if (pathname === '/docs' || pathname === '/docs/' || pathname === '/docs/index.html') {
+        return '/docs/';
+    }
+
+    if (pathname.endsWith('/index.html')) {
+        return pathname.slice(0, -'index.html'.length);
+    }
+
+    if (pathname.startsWith('/docs') && !pathname.endsWith('/')) {
+        return `${pathname}/`;
+    }
+
+    return pathname;
+}
+
+function injectGlobalOptInScripts(html: string, enable: BuilderContext['enable']): string {
+    if (!enable) {
+        return html;
+    }
+
+    const document = load(html);
+    const head = document('head').first();
+    if (head.length === 0) {
+        return html;
+    }
+
+    if (enable.clientNav) {
+        const hasClientNav = document('script[data-webstir="client-nav"]').length > 0;
+        if (!hasClientNav) {
+            head.append('<script type="module" data-webstir="client-nav" src="/clientNav.js"></script>');
+        }
+    }
+
+    if (enable.search) {
+        const hasSearch = document('script[data-webstir="search"]').length > 0;
+        if (!hasSearch) {
+            head.append('<script type="module" data-webstir="search" src="/search.js"></script>');
+        }
+    }
+
+    return document.root().html() ?? html;
+}
+
+async function rewriteContentForPublish(
+    html: string,
+    shared: { css?: string } | null,
+    docsManifest: { js?: string; css?: string }
+): Promise<string> {
+    const document = load(html);
+
+    document('script[src="/hmr.js"]').remove();
+    document('script[src="/refresh.js"]').remove();
+
+    if (shared?.css) {
+        document(`link[href="/app/app.css"]`).attr('href', `/app/${shared.css}`);
+    }
+
+    if (docsManifest.css) {
+        const selector = `link[href="/${FOLDERS.pages}/docs/${FILES.index}${EXTENSIONS.css}"]`;
+        document(selector).attr('href', `/${FOLDERS.pages}/docs/${docsManifest.css}`);
+    }
+
+    if (docsManifest.js) {
+        const selector = `script[src="/${FOLDERS.pages}/docs/${FILES.index}${EXTENSIONS.js}"]`;
+        document(selector).attr('src', `/${FOLDERS.pages}/docs/${docsManifest.js}`);
+        document(selector).attr('type', 'module');
+    }
+
+    return document.root().html() ?? html;
 }
 
 function rewriteMarkdownLinks(html: string): string {

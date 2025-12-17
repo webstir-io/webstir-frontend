@@ -1,28 +1,10 @@
 import path from 'node:path';
-import { readJson, writeJson } from './utils/fs.js';
+import { readJson, writeJson } from '../../utils/fs.js';
+import type { WorkspaceModuleView, WorkspacePackageJson } from '../../config/workspaceManifest.js';
 
 export interface SsgViewMetadataOptions {
     readonly workspaceRoot: string;
     readonly pageName: string;
-}
-
-interface WorkspaceModuleView {
-    readonly name?: string;
-    readonly path?: string;
-    readonly renderMode?: 'ssg' | 'ssr' | 'spa';
-    readonly staticPaths?: readonly string[];
-}
-
-interface WorkspaceModuleConfig {
-    readonly views?: readonly WorkspaceModuleView[];
-}
-
-interface WorkspacePackageJson {
-    readonly name?: string;
-    readonly webstir?: {
-        readonly mode?: string;
-        readonly moduleManifest?: WorkspaceModuleConfig;
-    };
 }
 
 export async function ensureSsgViewMetadataForPage(options: SsgViewMetadataOptions): Promise<void> {

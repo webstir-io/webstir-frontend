@@ -59,7 +59,7 @@ async function bundleJavaScript(context: BuilderContext, isProduction: boolean):
     }
 
     // Always copy dev runtime scripts in dev builds to support HMR/refresh even when no page JS exists.
-    if (!isProduction || context.enable?.clientNav) {
+    if (!isProduction || context.enable?.clientNav || context.enable?.search) {
         await copyRuntimeScripts(config, context.enable, isProduction);
     }
 }
@@ -130,7 +130,8 @@ async function copyRuntimeScripts(
         // Always copy dev runtime in dev builds to support live reload, even if no page JS exists.
         { name: FILES.refreshJs, copyToDist: false, required: !isProduction },
         { name: FILES.hmrJs, copyToDist: false, required: !isProduction },
-        { name: 'clientNav.js', copyToDist: true, required: enable?.clientNav === true }
+        { name: 'clientNav.js', copyToDist: true, required: enable?.clientNav === true },
+        { name: 'search.js', copyToDist: true, required: enable?.search === true }
     ];
 
     for (const script of scripts) {
@@ -141,11 +142,18 @@ async function copyRuntimeScripts(
         const source =
             script.name === 'clientNav.js'
             ? await resolveClientNavSource(config)
+            : script.name === 'search.js'
+                ? await resolveSearchSource(config)
             : path.join(config.paths.src.app, script.name);
         if (!(await pathExists(source))) {
             if (script.name === 'clientNav.js') {
                 throw new Error(
                     `client-nav is enabled but the helper script is missing. Run 'webstir enable client-nav' or add src/frontend/app/clientNav.js.`
+                );
+            }
+            if (script.name === 'search.js') {
+                throw new Error(
+                    `search is enabled but the helper script is missing. Run 'webstir enable search' or add src/frontend/app/search.js.`
                 );
             }
             continue;
@@ -170,6 +178,20 @@ async function resolveClientNavSource(config: BuilderContext['config']): Promise
     }
 
     const bundledSource = path.join(PACKAGE_ROOT, 'src', 'features', 'client-nav', 'clientNav.js');
+    if (await pathExists(bundledSource)) {
+        return bundledSource;
+    }
+
+    return workspaceSource;
+}
+
+async function resolveSearchSource(config: BuilderContext['config']): Promise<string> {
+    const workspaceSource = path.join(config.paths.src.app, 'search.js');
+    if (await pathExists(workspaceSource)) {
+        return workspaceSource;
+    }
+
+    const bundledSource = path.join(PACKAGE_ROOT, 'src', 'features', 'search', 'search.js');
     if (await pathExists(bundledSource)) {
         return bundledSource;
     }

@@ -211,6 +211,15 @@ function injectOptInScripts(
         }
     }
 
+    if (enable.search) {
+        const hasHelper = document('script[data-webstir="search"]').length > 0;
+        if (!hasHelper) {
+            document('head').append(
+                `<script type="module" data-webstir="search" src="/search.js"></script>`
+            );
+        }
+    }
+
     return document.root().html() ?? html;
 }
 

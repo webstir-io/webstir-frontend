@@ -1,26 +1,9 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { FrontendConfig } from './types.js';
-import { ensureDir, pathExists, readJson, writeJson } from './utils/fs.js';
-import { FOLDERS } from './core/constants.js';
-
-interface WorkspaceModuleViewMetadata {
-    readonly name?: string;
-    readonly path?: string;
-    readonly renderMode?: 'ssg' | 'ssr' | 'spa';
-    readonly staticPaths?: readonly string[];
-}
-
-interface WorkspaceModuleConfig {
-    readonly views?: readonly WorkspaceModuleViewMetadata[];
-}
-
-interface WorkspacePackageJson {
-    readonly webstir?: {
-        readonly mode?: string;
-        readonly moduleManifest?: WorkspaceModuleConfig;
-    };
-}
+import type { FrontendConfig } from '../../types.js';
+import { ensureDir, pathExists, readJson, writeJson } from '../../utils/fs.js';
+import { FOLDERS } from '../../core/constants.js';
+import type { WorkspaceModuleView, WorkspacePackageJson } from '../../config/workspaceManifest.js';
 
 interface ViewDefinitionLike {
     readonly name?: string;
@@ -128,10 +111,10 @@ export async function generateSsgViewData(config: FrontendConfig): Promise<void>
 }
 
 function findViewMetadata(
-    views: readonly WorkspaceModuleViewMetadata[],
+    views: readonly WorkspaceModuleView[],
     name: string,
     templatePath: string
-): WorkspaceModuleViewMetadata | undefined {
+): WorkspaceModuleView | undefined {
     return (
         views.find((view) => (view.name && view.name === name) || (view.path && view.path === templatePath)) ??
         views.find((view) => view.path === templatePath) ??
@@ -287,7 +270,7 @@ function createMinimalSsrContext(pathname: string, params: Record<string, string
 }
 
 function getEffectiveStaticPaths(
-    meta: WorkspaceModuleViewMetadata | undefined,
+    meta: WorkspaceModuleView | undefined,
     definition: ViewDefinitionLike,
     isSsgWorkspace: boolean
 ): readonly string[] {

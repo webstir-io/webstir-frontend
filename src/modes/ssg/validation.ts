@@ -1,23 +1,8 @@
 import path from 'node:path';
-import { readJson } from './utils/fs.js';
+import { readJson } from '../../utils/fs.js';
+import type { WorkspaceModuleConfig, WorkspacePackageJson } from '../../config/workspaceManifest.js';
 
-interface WorkspaceModuleRouteGuard {
-    readonly renderMode?: unknown;
-    readonly staticPaths?: unknown;
-    readonly ssg?: unknown;
-}
-
-interface WorkspaceModuleConfigGuard {
-    readonly routes?: readonly WorkspaceModuleRouteGuard[];
-}
-
-interface WorkspacePackageJsonGuard {
-    readonly webstir?: {
-        readonly moduleManifest?: WorkspaceModuleConfigGuard;
-    };
-}
-
-export function assertNoSsgRoutesInModuleConfig(moduleConfig: WorkspaceModuleConfigGuard | undefined): void {
+export function assertNoSsgRoutesInModuleConfig(moduleConfig: WorkspaceModuleConfig | undefined): void {
     const routes = moduleConfig?.routes ?? [];
     if (!Array.isArray(routes) || routes.length === 0) {
         return;
@@ -46,7 +31,7 @@ export function assertNoSsgRoutesInModuleConfig(moduleConfig: WorkspaceModuleCon
 
 export async function assertNoSsgRoutes(workspaceRoot: string): Promise<void> {
     const pkgPath = path.join(workspaceRoot, 'package.json');
-    const pkg = await readJson<WorkspacePackageJsonGuard>(pkgPath);
+    const pkg = await readJson<WorkspacePackageJson>(pkgPath);
     const moduleConfig = pkg?.webstir?.moduleManifest;
     assertNoSsgRoutesInModuleConfig(moduleConfig);
 }

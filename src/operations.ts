@@ -2,10 +2,12 @@ import type { AddPageCommandOptions, EnableFlags, FrontendCommandOptions } from 
 import { runPipeline } from './pipeline.js';
 import { createPageScaffold } from './html/pageScaffold.js';
 import { prepareWorkspaceConfig } from './config/setup.js';
-import { applySsgRouting } from './ssg.js';
-import { generateSsgViewData } from './ssgViews.js';
-import { ensureSsgViewMetadataForPage } from './ssgMetadata.js';
-import { assertNoSsgRoutes } from './ssgValidation.js';
+import {
+    applySsgRouting,
+    assertNoSsgRoutes,
+    ensureSsgViewMetadataForPage,
+    generateSsgViewData
+} from './modes/ssg/index.js';
 import path from 'node:path';
 import { readJson } from './utils/fs.js';
 

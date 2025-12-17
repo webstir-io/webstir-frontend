@@ -1,34 +1,12 @@
 import path from 'node:path';
-import { FOLDERS, FILES } from './core/constants.js';
-import type { FrontendConfig } from './types.js';
-import { copy, ensureDir, pathExists, readJson } from './utils/fs.js';
-import { getPageDirectories } from './core/pages.js';
-import { assertNoSsgRoutesInModuleConfig } from './ssgValidation.js';
-
-interface WorkspaceModuleView {
-    readonly path?: string;
-    readonly renderMode?: 'ssg' | 'ssr' | 'spa';
-    readonly staticPaths?: readonly string[];
-}
-
-interface WorkspaceModuleRouteGuard {
-    readonly renderMode?: unknown;
-    readonly staticPaths?: unknown;
-    readonly ssg?: unknown;
-}
-
-interface WorkspaceModuleConfig {
-    readonly views?: readonly WorkspaceModuleView[];
-    readonly routes?: readonly WorkspaceModuleRouteGuard[];
-}
-
-interface WorkspacePackageJson {
-    readonly name?: string;
-    readonly webstir?: {
-        readonly mode?: string;
-        readonly moduleManifest?: WorkspaceModuleConfig;
-    };
-}
+import { glob } from 'glob';
+import { FOLDERS, FILES } from '../../core/constants.js';
+import type { FrontendConfig } from '../../types.js';
+import { copy, ensureDir, pathExists, readJson } from '../../utils/fs.js';
+import { getPageDirectories } from '../../core/pages.js';
+import { assertNoSsgRoutesInModuleConfig } from './validation.js';
+import type { WorkspaceModuleView, WorkspacePackageJson } from '../../config/workspaceManifest.js';
+import { runSsgSeo } from './seo.js';
 
 export async function applySsgRouting(config: FrontendConfig): Promise<void> {
     const distRoot = config.paths.dist.frontend;
@@ -60,7 +38,51 @@ export async function applySsgRouting(config: FrontendConfig): Promise<void> {
         await copy(sourceIndex, targetIndex);
     }
 
+    await applyDocsContentAliases(distRoot, distPagesRoot);
     await applyStaticPathAliases(config, distRoot, distPagesRoot, pageIndexMap);
+
+    const siteUrl = await resolveWorkspaceSiteUrl(config.paths.workspace);
+    await runSsgSeo(distRoot, { siteUrl });
+}
+
+async function applyDocsContentAliases(distRoot: string, distPagesRoot: string): Promise<void> {
+    const docsRoot = path.join(distPagesRoot, 'docs');
+    if (!(await pathExists(docsRoot))) {
+        return;
+    }
+
+    const indexes = await glob('docs/**/index.html', {
+        cwd: distPagesRoot,
+        nodir: true
+    });
+
+    for (const relativeIndex of indexes) {
+        const sourceIndex = path.join(distPagesRoot, relativeIndex);
+        if (!(await pathExists(sourceIndex))) {
+            continue;
+        }
+
+        const targetIndex = path.join(distRoot, relativeIndex);
+        await ensureDir(path.dirname(targetIndex));
+        await copy(sourceIndex, targetIndex);
+    }
+}
+
+async function resolveWorkspaceSiteUrl(workspaceRoot: string): Promise<string | undefined> {
+    const fromEnv = process.env.WEBSTIR_SITE_URL?.trim();
+    if (fromEnv) {
+        return fromEnv;
+    }
+
+    const pkgPath = path.join(workspaceRoot, 'package.json');
+    const pkg = await readJson<Record<string, unknown>>(pkgPath);
+    const webstir = pkg?.webstir;
+    if (!webstir || typeof webstir !== 'object') {
+        return undefined;
+    }
+
+    const candidate = (webstir as Record<string, unknown>).siteUrl;
+    return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : undefined;
 }
 
 async function applyStaticPathAliases(
