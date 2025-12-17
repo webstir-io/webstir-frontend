@@ -1,9 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
 
 permissions:
@@ -11,11 +8,6 @@ permissions:
 
 jobs:
   build:
-    if: >
-      github.event_name != 'push' ||
-      (
-        !contains(github.event.head_commit.message, '[skip webstir-ci]')
-      )
     runs-on: ubuntu-latest
     env:
       NODE_AUTH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
@@ -40,6 +32,5 @@ jobs:
 
       - name: Test
         run: npm test
-      - name: Smoke (main only)
-        if: github.ref == 'refs/heads/main'
+      - name: Smoke
         run: npm run smoke
