@@ -17,6 +17,14 @@ function getState() {
 
 const state = getState();
 
+function isTypingTarget(target) {
+  return target instanceof HTMLElement
+    && (target.isContentEditable
+      || target.tagName === 'INPUT'
+      || target.tagName === 'TEXTAREA'
+      || target.tagName === 'SELECT');
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -92,6 +100,10 @@ async function loadIndex() {
   }
 }
 
+function getSearchTrigger() {
+  return document.querySelector('[data-webstir-search-open]');
+}
+
 function ensureUi() {
   let root = document.getElementById('webstir-search');
   if (!root) {
@@ -101,8 +113,16 @@ function ensureUi() {
       '<div class="webstir-search__backdrop" data-webstir-search-close></div>',
       '<div class="webstir-search__panel" role="dialog" aria-modal="true" aria-label="Search">',
       '  <div class="webstir-search__header">',
-      '    <input class="webstir-search__input" type="search" placeholder="Search…" autocomplete="off" />',
-      '    <button type="button" class="webstir-search__close" data-webstir-search-close aria-label="Close search">×</button>',
+      '    <div class="webstir-search__field">',
+      '      <span class="webstir-search__icon" aria-hidden="true">',
+      '        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">',
+      '          <circle cx="11" cy="11" r="7"></circle>',
+      '          <path d="M20 20l-3.5-3.5"></path>',
+      '        </svg>',
+      '      </span>',
+      '      <input class="webstir-search__input" type="search" placeholder="Search..." autocomplete="off" spellcheck="false" autocapitalize="none" />',
+      '      <button type="button" class="webstir-search__close" data-webstir-search-close aria-label="Close search">Esc</button>',
+      '    </div>',
       '  </div>',
       '  <div class="webstir-search__scopes" hidden>',
       '    <button type="button" data-scope="all" aria-pressed="true">All</button>',
@@ -110,7 +130,7 @@ function ensureUi() {
       '    <button type="button" data-scope="page" aria-pressed="false">Pages</button>',
       '  </div>',
       '  <div class="webstir-search__body">',
-      '    <div class="webstir-search__hint">Type to search.</div>',
+      '    <div class="webstir-search__hint">Type at least 2 characters.</div>',
       '    <ul class="webstir-search__results" hidden></ul>',
       '  </div>',
       '</div>'
@@ -118,24 +138,56 @@ function ensureUi() {
     document.body.appendChild(root);
   }
 
-  if (!document.getElementById('webstir-search-style')) {
+  const styleMode = document.documentElement.getAttribute('data-webstir-search-styles');
+  const shouldInjectStyles = !styleMode || styleMode === 'inline';
+
+  if (shouldInjectStyles && !document.getElementById('webstir-search-style')) {
     const style = document.createElement('style');
     style.id = 'webstir-search-style';
     style.textContent = `
-#webstir-search { position: fixed; inset: 0; z-index: 9999; display: none; }
-#webstir-search[data-open="true"] { display: block; }
-.app-nav__search {
-  color: inherit;
-  text-decoration: none;
-  font-weight: 600;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
+#webstir-search {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
 }
-.app-nav__search:hover { background: rgba(17, 24, 39, 0.04); }
-.app-nav__search:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.35); outline-offset: 2px; }
+#webstir-search[data-open="true"] { opacity: 1; pointer-events: auto; }
+body.webstir-search-open { overflow: hidden; }
+
+.webstir-search__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255,255,255,0.02);
+  color: inherit;
+  cursor: pointer;
+  font-weight: 650;
+  transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+.webstir-search__trigger:hover { background: rgba(255,255,255,0.04); border-color: rgba(148, 163, 184, 0.28); }
+.webstir-search__trigger:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.35); outline-offset: 2px; }
+.webstir-search__trigger[aria-expanded="true"] { border-color: rgba(37, 99, 235, 0.45); }
+.webstir-search__trigger-icon { display: inline-flex; opacity: 0.9; }
+.webstir-search__trigger-text { opacity: 0.9; }
+.webstir-search__trigger-hint {
+  margin-left: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: rgba(229,231,235,0.85);
+  font-size: 12px;
+  font-weight: 750;
+}
+@media (max-width: 700px) {
+  .webstir-search__trigger-text { display: none; }
+  .webstir-search__trigger-hint { display: none; }
+}
+
 .webstir-search__group {
   margin-top: 10px;
   color: rgba(229,231,235,0.7);
@@ -144,51 +196,129 @@ function ensureUi() {
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
-.webstir-search__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+.webstir-search__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(8px);
+}
 .webstir-search__panel {
   position: relative;
   margin: 10vh auto 0;
   width: min(920px, calc(100vw - 32px));
   border-radius: 14px;
-  border: 1px solid rgba(229,231,235,0.18);
-  background: rgba(17,24,39,0.98);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(15, 23, 42, 0.92);
   color: #e5e7eb;
   overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.55);
+  transform: translateY(-10px) scale(0.985);
+  opacity: 0;
+  transition: transform 160ms ease, opacity 160ms ease;
+  max-height: min(70vh, 720px);
+  display: flex;
+  flex-direction: column;
 }
-.webstir-search__header { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 14px; border-bottom: 1px solid rgba(229,231,235,0.12); }
+#webstir-search[data-open="true"] .webstir-search__panel { transform: translateY(0) scale(1); opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  #webstir-search { transition: none; }
+  .webstir-search__panel { transition: none; transform: none; }
+  .webstir-search__trigger { transition: none; }
+}
+
+.webstir-search__header { padding: 14px; border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
+.webstir-search__field {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(2, 6, 23, 0.38);
+}
+.webstir-search__icon { display: inline-flex; opacity: 0.9; }
 .webstir-search__input {
   width: 100%;
-  padding: 12px 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(229,231,235,0.18);
-  background: rgba(255,255,255,0.06);
+  padding: 6px 2px;
+  border: 0;
+  background: transparent;
   color: inherit;
   outline: none;
+  font-size: 16px;
+  min-width: 0;
 }
-.webstir-search__input:focus-visible { outline: 3px solid rgba(37,99,235,0.55); outline-offset: 2px; }
-.webstir-search__close { padding: 0 12px; border-radius: 10px; border: 1px solid rgba(229,231,235,0.18); background: transparent; color: inherit; font-size: 20px; cursor: pointer; }
+.webstir-search__field:focus-within { outline: 3px solid rgba(37, 99, 235, 0.45); outline-offset: 2px; }
+.webstir-search__close {
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: transparent;
+  color: rgba(229,231,235,0.85);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.webstir-search__close:hover { background: rgba(255,255,255,0.06); }
 .webstir-search__scopes { display: flex; gap: 8px; padding: 0 14px 12px; }
-.webstir-search__scopes button { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(229,231,235,0.18); background: transparent; color: inherit; cursor: pointer; font-weight: 700; font-size: 13px; }
+.webstir-search__scopes button { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(148, 163, 184, 0.18); background: transparent; color: inherit; cursor: pointer; font-weight: 750; font-size: 13px; }
 .webstir-search__scopes button[aria-pressed="true"] { background: rgba(37,99,235,0.22); border-color: rgba(37,99,235,0.4); }
-.webstir-search__body { padding: 14px; }
-.webstir-search__hint { color: rgba(229,231,235,0.7); }
+.webstir-search__body { padding: 14px; overflow: auto; }
+.webstir-search__hint { color: rgba(229,231,235,0.75); }
 .webstir-search__results { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
-.webstir-search__results a { display: block; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(229,231,235,0.18); background: rgba(255,255,255,0.04); color: inherit; text-decoration: none; }
-.webstir-search__results a:hover { border-color: rgba(37,99,235,0.35); }
-.webstir-search__results strong { display: block; font-weight: 800; margin-bottom: 4px; }
+.webstir-search__results a { display: block; padding: 12px 12px; border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.16); background: rgba(255,255,255,0.03); color: inherit; text-decoration: none; }
+.webstir-search__results a:hover { border-color: rgba(37,99,235,0.35); background: rgba(255,255,255,0.045); }
+.webstir-search__results a:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.45); outline-offset: 2px; }
+.webstir-search__results strong { display: block; font-weight: 850; margin-bottom: 4px; }
 .webstir-search__results span { display: block; color: rgba(229,231,235,0.75); font-size: 0.95rem; line-height: 1.35; }
     `.trim();
     document.head.appendChild(style);
   }
 
   const nav = document.querySelector('.app-nav');
-  if (nav && !nav.querySelector('[data-webstir-search-open]')) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = 'Search';
-    button.className = 'app-nav__search';
-    button.setAttribute('data-webstir-search-open', '');
-    nav.appendChild(button);
+  if (nav) {
+    const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform ?? '');
+    const hint = isMac ? 'Cmd K' : 'Ctrl K';
+    const triggerContent = [
+      '<span class="webstir-search__trigger-icon" aria-hidden="true">',
+      '  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">',
+      '    <circle cx="11" cy="11" r="7"></circle>',
+      '    <path d="M20 20l-3.5-3.5"></path>',
+      '  </svg>',
+      '</span>',
+      '<span class="webstir-search__trigger-text">Search</span>',
+      `<span class="webstir-search__trigger-hint" aria-hidden="true">${escapeHtml(hint)}</span>`
+    ].join('');
+
+    const existingTrigger = nav.querySelector('[data-webstir-search-open]');
+    if (existingTrigger instanceof HTMLElement) {
+      existingTrigger.classList.add('webstir-search__trigger');
+      existingTrigger.setAttribute('data-webstir-search-open', '');
+      existingTrigger.setAttribute('aria-label', 'Search');
+      existingTrigger.setAttribute('aria-haspopup', 'dialog');
+      if (!existingTrigger.hasAttribute('aria-expanded')) {
+        existingTrigger.setAttribute('aria-expanded', 'false');
+      }
+      existingTrigger.removeAttribute('hidden');
+      if (existingTrigger instanceof HTMLButtonElement) {
+        existingTrigger.type = 'button';
+      }
+      if (!existingTrigger.innerHTML.trim()) {
+        existingTrigger.innerHTML = triggerContent;
+      }
+    } else {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'webstir-search__trigger';
+      button.setAttribute('data-webstir-search-open', '');
+      button.setAttribute('aria-label', 'Search');
+      button.setAttribute('aria-haspopup', 'dialog');
+      button.setAttribute('aria-expanded', 'false');
+      button.innerHTML = triggerContent;
+      nav.appendChild(button);
+    }
   }
 
   return root;
@@ -204,14 +334,25 @@ function setScope(scope) {
   });
 }
 
-function openSearch() {
+function openSearch(options) {
   const root = ensureUi();
   root.setAttribute('data-open', 'true');
   state.open = true;
+  document.body.classList.add('webstir-search-open');
+
+  const trigger = getSearchTrigger();
+  if (trigger instanceof HTMLElement) {
+    trigger.setAttribute('aria-expanded', 'true');
+  }
   const input = root.querySelector('.webstir-search__input');
   if (input) {
-    input.focus();
-    input.select();
+    if (options && typeof options.initialQuery === 'string') {
+      input.value = options.initialQuery;
+      input.focus();
+    } else {
+      input.focus();
+      input.select();
+    }
   }
   void refreshResults();
 }
@@ -221,6 +362,12 @@ function closeSearch() {
   if (!root) return;
   root.removeAttribute('data-open');
   state.open = false;
+  document.body.classList.remove('webstir-search-open');
+
+  const trigger = getSearchTrigger();
+  if (trigger instanceof HTMLElement) {
+    trigger.setAttribute('aria-expanded', 'false');
+  }
 }
 
 async function refreshResults() {
@@ -309,6 +456,13 @@ function boot() {
 
   root.addEventListener('click', (event) => {
     const target = event.target;
+    if (target instanceof Element) {
+      const resultLink = target.closest('.webstir-search__results a');
+      if (resultLink) {
+        closeSearch();
+        return;
+      }
+    }
     if (target && target.matches && target.matches('.webstir-search__backdrop')) {
       closeSearch();
     }
@@ -351,6 +505,16 @@ function boot() {
       event.preventDefault();
       closeSearch();
     }
+
+    if (!state.open && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
+      if (event.key.trim().length === 0) return;
+      if (isTypingTarget(event.target)) return;
+      openSearch({ initialQuery: event.key });
+    }
+  });
+
+  window.addEventListener('webstir:client-nav', () => {
+    if (state.open) closeSearch();
   });
 }
 
