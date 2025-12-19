@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { build as esbuild } from 'esbuild';
+import { glob } from 'glob';
 import { FOLDERS, FILES, EXTENSIONS } from '../core/constants.js';
 import type { Builder, BuilderContext } from './types.js';
 import { getPages } from '../core/pages.js';
@@ -11,8 +11,6 @@ import { shouldProcess } from '../utils/changedFile.js';
 import { findPageFromChangedFile } from '../utils/pathMatch.js';
 
 const ENTRY_EXTENSIONS = ['.ts', '.tsx', '.js'];
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const PACKAGE_ROOT = path.resolve(MODULE_DIR, '..', '..');
 
 export function createJavaScriptBuilder(context: BuilderContext): Builder {
     return {
@@ -40,6 +38,9 @@ async function bundleJavaScript(context: BuilderContext, isProduction: boolean):
     const pages = await getPages(config.paths.src.pages);
     let builtAny = false;
 
+    await assertFeatureModulesPresent(config, context.enable);
+    await compileAppTypeScript(config, isProduction);
+
     for (const page of pages) {
         if (targetPage && page.name !== targetPage) {
             continue;
@@ -62,6 +63,38 @@ async function bundleJavaScript(context: BuilderContext, isProduction: boolean):
     if (!isProduction || context.enable?.clientNav || context.enable?.search) {
         await copyRuntimeScripts(config, context.enable, isProduction);
     }
+}
+
+async function compileAppTypeScript(config: BuilderContext['config'], isProduction: boolean): Promise<void> {
+    const appRoot = config.paths.src.app;
+    if (!(await pathExists(appRoot))) {
+        return;
+    }
+
+    const entryPoints = (await glob('**/*.{ts,tsx}', { cwd: appRoot, nodir: true }))
+        .filter((relativePath) => !relativePath.endsWith('.d.ts'))
+        .map((relativePath) => path.join(appRoot, relativePath));
+    if (entryPoints.length === 0) {
+        return;
+    }
+
+    const outdir = isProduction
+        ? path.join(config.paths.dist.frontend, FOLDERS.app)
+        : path.join(config.paths.build.frontend, FOLDERS.app);
+    await ensureDir(outdir);
+
+    await esbuild({
+        entryPoints,
+        outdir,
+        format: 'esm',
+        target: 'es2020',
+        platform: 'browser',
+        sourcemap: !isProduction,
+        minify: isProduction,
+        bundle: false,
+        outbase: appRoot,
+        logLevel: 'silent'
+    });
 }
 
 async function buildForDevelopment(config: BuilderContext['config'], pageName: string, entryPoint: string): Promise<void> {
@@ -129,9 +162,7 @@ async function copyRuntimeScripts(
     const scripts = [
         // Always copy dev runtime in dev builds to support live reload, even if no page JS exists.
         { name: FILES.refreshJs, copyToDist: false, required: !isProduction },
-        { name: FILES.hmrJs, copyToDist: false, required: !isProduction },
-        { name: 'clientNav.js', copyToDist: true, required: enable?.clientNav === true },
-        { name: 'search.js', copyToDist: true, required: enable?.search === true }
+        { name: FILES.hmrJs, copyToDist: false, required: !isProduction }
     ];
 
     for (const script of scripts) {
@@ -139,23 +170,8 @@ async function copyRuntimeScripts(
             continue;
         }
 
-        const source =
-            script.name === 'clientNav.js'
-            ? await resolveClientNavSource(config)
-            : script.name === 'search.js'
-                ? await resolveSearchSource(config)
-            : path.join(config.paths.src.app, script.name);
+        const source = path.join(config.paths.src.app, script.name);
         if (!(await pathExists(source))) {
-            if (script.name === 'clientNav.js') {
-                throw new Error(
-                    `client-nav is enabled but the helper script is missing. Run 'webstir enable client-nav' or add src/frontend/app/clientNav.js.`
-                );
-            }
-            if (script.name === 'search.js') {
-                throw new Error(
-                    `search is enabled but the helper script is missing. Run 'webstir enable search' or add src/frontend/app/search.js.`
-                );
-            }
             continue;
         }
 
@@ -171,34 +187,6 @@ async function copyRuntimeScripts(
     }
 }
 
-async function resolveClientNavSource(config: BuilderContext['config']): Promise<string> {
-    const workspaceSource = path.join(config.paths.src.app, 'clientNav.js');
-    if (await pathExists(workspaceSource)) {
-        return workspaceSource;
-    }
-
-    const bundledSource = path.join(PACKAGE_ROOT, 'src', 'features', 'client-nav', 'clientNav.js');
-    if (await pathExists(bundledSource)) {
-        return bundledSource;
-    }
-
-    return workspaceSource;
-}
-
-async function resolveSearchSource(config: BuilderContext['config']): Promise<string> {
-    const workspaceSource = path.join(config.paths.src.app, 'search.js');
-    if (await pathExists(workspaceSource)) {
-        return workspaceSource;
-    }
-
-    const bundledSource = path.join(PACKAGE_ROOT, 'src', 'features', 'search', 'search.js');
-    if (await pathExists(bundledSource)) {
-        return bundledSource;
-    }
-
-    return workspaceSource;
-}
-
 async function resolveEntryPoint(pageDirectory: string): Promise<string | null> {
     for (const extension of ENTRY_EXTENSIONS) {
         const candidate = path.join(pageDirectory, `${FILES.index}${extension}`);
@@ -208,4 +196,43 @@ async function resolveEntryPoint(pageDirectory: string): Promise<string | null> 
     }
 
     return null;
+}
+
+async function assertFeatureModulesPresent(config: BuilderContext['config'], enable: BuilderContext['enable']): Promise<void> {
+    if (!enable) {
+        return;
+    }
+
+    const missing: string[] = [];
+
+    if (enable.clientNav === true) {
+        const hasClientNav = await hasFeatureModule(config, 'client-nav');
+        if (!hasClientNav) {
+            missing.push('client-nav');
+        }
+    }
+
+    if (enable.search === true) {
+        const hasSearch = await hasFeatureModule(config, 'search');
+        if (!hasSearch) {
+            missing.push('search');
+        }
+    }
+
+    if (missing.length === 0) {
+        return;
+    }
+
+    const expected = missing
+        .map((name) => `src/frontend/app/scripts/features/${name}.ts`)
+        .join(', ');
+    throw new Error(
+        `Enabled feature module(s) missing: ${missing.join(', ')}. Run 'webstir enable <feature>' to scaffold them (expected: ${expected}).`
+    );
+}
+
+async function hasFeatureModule(config: BuilderContext['config'], name: string): Promise<boolean> {
+    const root = path.join(config.paths.src.app, 'scripts', 'features');
+    return await pathExists(path.join(root, `${name}${EXTENSIONS.ts}`))
+        || await pathExists(path.join(root, `${name}${EXTENSIONS.js}`));
 }

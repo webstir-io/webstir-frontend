@@ -1105,32 +1105,14 @@ function normalizeDocsHref(pathname: string): string {
     return pathname;
 }
 
-function injectGlobalOptInScripts(html: string, enable: BuilderContext['enable']): string {
+function injectGlobalOptInScripts(
+    html: string,
+    enable: BuilderContext['enable']
+): string {
     if (!enable) {
         return html;
     }
-
-    const document = load(html);
-    const head = document('head').first();
-    if (head.length === 0) {
-        return html;
-    }
-
-    if (enable.clientNav) {
-        const hasClientNav = document('script[data-webstir="client-nav"]').length > 0;
-        if (!hasClientNav) {
-            head.append('<script type="module" data-webstir="client-nav" src="/clientNav.js"></script>');
-        }
-    }
-
-    if (enable.search) {
-        const hasSearch = document('script[data-webstir="search"]').length > 0;
-        if (!hasSearch) {
-            head.append('<script type="module" data-webstir="search" src="/search.js"></script>');
-        }
-    }
-
-    return document.root().html() ?? html;
+    return html;
 }
 
 async function rewriteContentForPublish(

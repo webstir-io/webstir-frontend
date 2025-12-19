@@ -35,8 +35,10 @@ async function createWorkspace() {
 async function createWorkspaceWithClientNav() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'webstir-frontend-workspace-'));
   const appDir = path.join(root, 'src', 'frontend', 'app');
+  const featureDir = path.join(appDir, 'scripts', 'features');
   const pageDir = path.join(root, 'src', 'frontend', 'pages', 'home');
   await fs.mkdir(appDir, { recursive: true });
+  await fs.mkdir(featureDir, { recursive: true });
   await fs.mkdir(pageDir, { recursive: true });
 
   const pkg = {
@@ -52,6 +54,8 @@ async function createWorkspaceWithClientNav() {
   await fs.writeFile(path.join(root, 'package.json'), JSON.stringify(pkg, null, 2), 'utf8');
 
   await fs.writeFile(path.join(appDir, 'app.html'), '<!DOCTYPE html><html><head><title>App</title></head><body><main></main></body></html>', 'utf8');
+  await fs.writeFile(path.join(appDir, 'app.ts'), 'import "./scripts/features/client-nav.js";', 'utf8');
+  await fs.writeFile(path.join(featureDir, 'client-nav.ts'), 'export {};', 'utf8');
   await fs.writeFile(path.join(pageDir, 'index.html'), '<head></head><main><section>Home</section></main>', 'utf8');
 
   return root;
@@ -93,7 +97,7 @@ test('frontend provider publish produces dist assets and preserves entry in mani
   assert.ok(publishResult.manifest.entryPoints.some((e) => e.endsWith('pages/home/index.js')));
 });
 
-test('enable.clientNav copies helper and injects script for ssg', async (t) => {
+test('enable.clientNav uses feature module (no legacy helper injection)', async (t) => {
   const frontendProvider = await loadProviderOrSkip(t);
   if (!frontendProvider) return; // skip
   const workspace = await createWorkspaceWithClientNav();
@@ -102,12 +106,32 @@ test('enable.clientNav copies helper and injects script for ssg', async (t) => {
   await frontendProvider.build({ workspaceRoot: workspace, env: { WEBSTIR_MODULE_MODE: 'publish' }, incremental: false });
 
   const distClientNav = path.join(workspace, 'dist', 'frontend', 'clientNav.js');
-  assert.equal(fssync.existsSync(distClientNav), true, 'expected dist/frontend/clientNav.js');
-
-  const helper = await fs.readFile(distClientNav, 'utf8');
-  assert.ok(helper.includes('webstir:client-nav'), 'expected built-in client-nav helper');
+  assert.equal(fssync.existsSync(distClientNav), false, 'did not expect dist/frontend/clientNav.js');
 
   const distHtml = await fs.readFile(path.join(workspace, 'dist', 'frontend', 'pages', 'home', 'index.html'), 'utf8');
-  assert.ok(distHtml.includes('clientNav.js'), 'expected client-nav script injected');
+  assert.ok(!distHtml.includes('clientNav.js'), 'did not expect client-nav script injected');
   assert.ok(!distHtml.includes('index.js'), 'should not inject page index.js when none exists');
+});
+
+test('enable.clientNav without feature module fails fast', async (t) => {
+  const frontendProvider = await loadProviderOrSkip(t);
+  if (!frontendProvider) return; // skip
+  const workspace = await createWorkspace();
+
+  const pkg = {
+    name: 'webstir-project',
+    version: '1.0.0',
+    webstir: {
+      mode: 'ssg',
+      enable: {
+        clientNav: true
+      }
+    }
+  };
+  await fs.writeFile(path.join(workspace, 'package.json'), JSON.stringify(pkg, null, 2), 'utf8');
+
+  await assert.rejects(
+    () => frontendProvider.build({ workspaceRoot: workspace, env: { WEBSTIR_MODULE_MODE: 'build' }, incremental: false }),
+    /Enabled feature module\(s\) missing: client-nav/
+  );
 });

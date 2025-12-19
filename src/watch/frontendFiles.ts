@@ -18,12 +18,6 @@ export async function resolveEntryPoint(pageDirectory: string): Promise<string |
 
 export async function copyRefreshScript(config: FrontendConfig, enable?: EnableFlags): Promise<void> {
     const runtimeScripts: string[] = [FILES.refreshJs, FILES.hmrJs];
-    // Keep any opt-in helper scripts present in the dev build output.
-    // These are served from the frontend build root (e.g. /clientNav.js).
-    // Watch mode should behave the same as the build pipeline.
-    if (enable?.clientNav === true) {
-        runtimeScripts.push('clientNav.js');
-    }
 
     for (const scriptName of runtimeScripts) {
         const source = path.join(config.paths.src.app, scriptName);

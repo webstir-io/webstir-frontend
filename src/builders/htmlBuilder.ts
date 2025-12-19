@@ -82,7 +82,13 @@ async function buildHtml(context: BuilderContext): Promise<void> {
             validatePageFragment(fragment, sourceHtmlPath);
 
             const mergedHtml = mergeTemplates(templateHtml, fragment);
-            const mergedWithScripts = injectOptInScripts(mergedHtml, context.enable, page.name, page.directory, sourceHtmlPath);
+            const mergedWithScripts = injectOptInScripts(
+                mergedHtml,
+                context.enable,
+                page.name,
+                page.directory,
+                sourceHtmlPath
+            );
             const targetPath = path.join(targetDir, path.basename(relativeHtml));
             await writeFile(targetPath, mergedWithScripts);
         }
@@ -199,24 +205,6 @@ function injectOptInScripts(
         const hasScript = document(`script[src="/${FOLDERS.pages}/${pageName}/${FILES.index}${EXTENSIONS.js}"]`).length > 0;
         if (!hasScript) {
             document('head').append(`<script type="module" src="/${FOLDERS.pages}/${pageName}/${FILES.index}${EXTENSIONS.js}"></script>`);
-        }
-    }
-
-    if (enable.clientNav) {
-        const hasHelper = document('script[data-webstir="client-nav"]').length > 0;
-        if (!hasHelper) {
-            document('head').append(
-                `<script type="module" data-webstir="client-nav" src="/clientNav.js"></script>`
-            );
-        }
-    }
-
-    if (enable.search) {
-        const hasHelper = document('script[data-webstir="search"]').length > 0;
-        if (!hasHelper) {
-            document('head').append(
-                `<script type="module" data-webstir="search" src="/search.js"></script>`
-            );
         }
     }
 
