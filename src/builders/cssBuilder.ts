@@ -16,6 +16,7 @@ import { findPageFromChangedFile } from '../utils/pathMatch.js';
 const MODULE_SUFFIX = '.module';
 const APP_CSS_BASENAME = 'app';
 const csso = ((cssoModule as unknown as { default?: typeof cssoModule }).default ?? cssoModule) as typeof cssoModule;
+const PAGE_IMPORT_PATTERN = /@import\s+(?:url\()?[\s]*['"]([^'"\)]+)['"][\s]*\)?\s*;?/g;
 
 interface SharedCssArtifacts {
     appCss?: string;
@@ -56,8 +57,9 @@ async function processCss(context: BuilderContext, isProduction: boolean): Promi
         }
 
         const css = await readFile(entryPath);
+        const inlinedCss = await inlinePageImports(css, page.directory);
         const processor = postcss([autoprefixer]);
-        const processed = await processor.process(css, { from: entryPath, map: !isProduction ? { inline: true } : false });
+        const processed = await processor.process(inlinedCss, { from: entryPath, map: !isProduction ? { inline: true } : false });
         const normalized = resolveAppImports(processed.css, isProduction ? sharedArtifacts.appCss : undefined);
 
         if (isProduction) {
@@ -65,6 +67,11 @@ async function processCss(context: BuilderContext, isProduction: boolean): Promi
             await emitProductionCss(config, page.name, inlined);
         } else {
             await emitDevelopmentCss(config, page.name, normalized);
+            await syncPageCssAssetsForDevelopment(
+                page.directory,
+                path.join(config.paths.build.frontend, FOLDERS.pages, page.name),
+                entryPath
+            );
         }
     }
 }
@@ -95,6 +102,41 @@ async function emitProductionCss(config: BuilderContext['config'], pageName: str
     await updatePageManifest(outputDir, pageName, (manifest) => {
         manifest.css = fileName;
     });
+}
+
+async function syncPageCssAssetsForDevelopment(
+    pageDirectory: string,
+    outputDir: string,
+    entryPath: string
+): Promise<void> {
+    const sourceFiles = await glob('**/*.css', { cwd: pageDirectory, nodir: true });
+    const entryRelative = normalizeForwardSlashes(path.relative(pageDirectory, entryPath));
+
+    const copySet = new Set<string>();
+    for (const relative of sourceFiles) {
+        const normalized = normalizeForwardSlashes(relative);
+        if (normalized === entryRelative) {
+            continue;
+        }
+
+        copySet.add(normalized);
+        const sourcePath = path.join(pageDirectory, relative);
+        const destinationPath = path.join(outputDir, relative);
+        await ensureDir(path.dirname(destinationPath));
+        await copy(sourcePath, destinationPath);
+    }
+
+    const existingFiles = await glob('**/*.css', { cwd: outputDir, nodir: true });
+    for (const relative of existingFiles) {
+        const normalized = normalizeForwardSlashes(relative);
+        if (normalized === `${FILES.index}${EXTENSIONS.css}`) {
+            continue;
+        }
+
+        if (!copySet.has(normalized)) {
+            await remove(path.join(outputDir, relative)).catch(() => undefined);
+        }
+    }
 }
 
 async function processAppCss(config: BuilderContext['config'], isProduction: boolean): Promise<SharedCssArtifacts> {
@@ -206,6 +248,82 @@ function resolveAppImports(css: string, appCssFile?: string): string {
     }
 
     return result.replace(/@app\//g, '/app/');
+}
+
+async function inlinePageImports(css: string, pageDirectory: string, seen: Set<string> = new Set()): Promise<string> {
+    const segments: string[] = [];
+    let lastIndex = 0;
+
+    for (const match of css.matchAll(PAGE_IMPORT_PATTERN)) {
+        const index = match.index ?? 0;
+        segments.push(css.slice(lastIndex, index));
+
+        const importPath = String(match[1] ?? '').trim();
+        if (!shouldInlinePageImport(importPath)) {
+            segments.push(match[0]);
+            lastIndex = index + match[0].length;
+            continue;
+        }
+
+        const resolved = path.resolve(pageDirectory, importPath);
+        if (!isWithin(resolved, pageDirectory)) {
+            segments.push(match[0]);
+            lastIndex = index + match[0].length;
+            continue;
+        }
+
+        const key = resolved;
+        if (seen.has(key)) {
+            lastIndex = index + match[0].length;
+            continue;
+        }
+
+        if (!(await pathExists(resolved))) {
+            segments.push(match[0]);
+            lastIndex = index + match[0].length;
+            continue;
+        }
+
+        seen.add(key);
+        const imported = await readFile(resolved);
+        const inlined = await inlinePageImports(imported, pageDirectory, seen);
+        seen.delete(key);
+        segments.push(inlined);
+
+        lastIndex = index + match[0].length;
+    }
+
+    segments.push(css.slice(lastIndex));
+    return segments.join('');
+}
+
+function shouldInlinePageImport(importPath: string): boolean {
+    if (importPath.length === 0) {
+        return false;
+    }
+
+    if (!importPath.endsWith(EXTENSIONS.css)) {
+        return false;
+    }
+
+    if (importPath.startsWith('/') || importPath.startsWith('http:') || importPath.startsWith('https:')) {
+        return false;
+    }
+
+    if (importPath.startsWith('@') || importPath.includes('?') || importPath.includes('#')) {
+        return false;
+    }
+
+    if (importPath.includes('..')) {
+        return false;
+    }
+
+    return true;
+}
+
+function isWithin(candidate: string, root: string): boolean {
+    const relative = path.relative(root, candidate);
+    return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 async function inlineAppImports(css: string, distRoot: string, seen: Set<string> = new Set()): Promise<string> {
