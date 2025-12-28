@@ -1,6 +1,7 @@
 import path from 'node:path';
 import postcss from 'postcss';
 import autoprefixer from 'autoprefixer';
+import customMedia from 'postcss-custom-media';
 import * as cssoModule from 'csso';
 import { glob } from 'glob';
 import { FOLDERS, FILES, EXTENSIONS } from '../core/constants.js';
@@ -43,7 +44,8 @@ async function processCss(context: BuilderContext, isProduction: boolean): Promi
         return;
     }
 
-    const sharedArtifacts = await processAppCss(config, isProduction);
+    const processor = await createPostcssProcessor(config);
+    const sharedArtifacts = await processAppCss(config, isProduction, processor);
     const targetPage = findPageFromChangedFile(context.changedFile, config.paths.src.pages);
     const pages = await getPages(config.paths.src.pages);
 
@@ -58,7 +60,6 @@ async function processCss(context: BuilderContext, isProduction: boolean): Promi
 
         const css = await readFile(entryPath);
         const inlinedCss = await inlinePageImports(css, page.directory);
-        const processor = postcss([autoprefixer]);
         const processed = await processor.process(inlinedCss, { from: entryPath, map: !isProduction ? { inline: true } : false });
         const normalized = resolveAppImports(processed.css, isProduction ? sharedArtifacts.appCss : undefined);
 
@@ -139,13 +140,16 @@ async function syncPageCssAssetsForDevelopment(
     }
 }
 
-async function processAppCss(config: BuilderContext['config'], isProduction: boolean): Promise<SharedCssArtifacts> {
+async function processAppCss(
+    config: BuilderContext['config'],
+    isProduction: boolean,
+    processor: postcss.Processor
+): Promise<SharedCssArtifacts> {
     const appCssPath = path.join(config.paths.src.app, 'app.css');
     if (!(await pathExists(appCssPath))) {
         return {};
     }
 
-    const processor = postcss([autoprefixer]);
     const source = await readFile(appCssPath);
 
     if (isProduction) {
@@ -165,6 +169,20 @@ async function processAppCss(config: BuilderContext['config'], isProduction: boo
     await emitAppDevelopmentCss(config, rewritten);
     await syncAppStyles(config.paths.src.app, path.join(config.paths.build.frontend, FOLDERS.app));
     return {};
+}
+
+async function createPostcssProcessor(config: BuilderContext['config']): Promise<postcss.Processor> {
+    const tokensPath = path.join(config.paths.src.app, 'styles', 'tokens.css');
+    const importFrom: string[] = [];
+    if (await pathExists(tokensPath)) {
+        importFrom.push(tokensPath);
+    }
+
+    const customMediaPlugin = importFrom.length > 0
+        ? customMedia({ importFrom })
+        : customMedia();
+
+    return postcss([customMediaPlugin, autoprefixer]);
 }
 
 async function emitAppDevelopmentCss(config: BuilderContext['config'], css: string): Promise<void> {

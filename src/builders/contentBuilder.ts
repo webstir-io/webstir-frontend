@@ -810,8 +810,8 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
     const docsLayoutHtml = [
         '<section class="docs-layout" data-scope="docs">',
         '  <div class="ws-container docs-layout__inner">',
-        '    <div class="docs-main">',
-        `      <article class="docs-article">${bodyHtml}</article>`,
+        '    <div class="docs-main ws-flow">',
+        `      <article class="docs-article ws-markdown">${bodyHtml}</article>`,
         '    </div>',
         '  </div>',
         '</section>'
