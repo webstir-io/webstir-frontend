@@ -44,8 +44,9 @@ async function processCss(context: BuilderContext, isProduction: boolean): Promi
         return;
     }
 
-    const processor = await createPostcssProcessor(config);
-    const sharedArtifacts = await processAppCss(config, isProduction, processor);
+    const processor = createPostcssProcessor();
+    const customMediaPrelude = await loadCustomMediaPrelude(config);
+    const sharedArtifacts = await processAppCss(config, isProduction, processor, customMediaPrelude);
     const targetPage = findPageFromChangedFile(context.changedFile, config.paths.src.pages);
     const pages = await getPages(config.paths.src.pages);
 
@@ -60,7 +61,8 @@ async function processCss(context: BuilderContext, isProduction: boolean): Promi
 
         const css = await readFile(entryPath);
         const inlinedCss = await inlinePageImports(css, page.directory);
-        const processed = await processor.process(inlinedCss, { from: entryPath, map: !isProduction ? { inline: true } : false });
+        const prepared = applyCustomMediaPrelude(inlinedCss, customMediaPrelude);
+        const processed = await processor.process(prepared, { from: entryPath, map: !isProduction ? { inline: true } : false });
         const normalized = resolveAppImports(processed.css, isProduction ? sharedArtifacts.appCss : undefined);
 
         if (isProduction) {
@@ -143,17 +145,18 @@ async function syncPageCssAssetsForDevelopment(
 async function processAppCss(
     config: BuilderContext['config'],
     isProduction: boolean,
-    processor: postcss.Processor
+    processor: postcss.Processor,
+    customMediaPrelude: string
 ): Promise<SharedCssArtifacts> {
     const appCssPath = path.join(config.paths.src.app, 'app.css');
     if (!(await pathExists(appCssPath))) {
         return {};
     }
 
-    const source = await readFile(appCssPath);
+    const source = applyCustomMediaPrelude(await readFile(appCssPath), customMediaPrelude);
 
     if (isProduction) {
-        const stylesMap = await emitAppStylesProduction(config, processor);
+        const stylesMap = await emitAppStylesProduction(config, processor, customMediaPrelude);
         const processed = await processor.process(source, { from: appCssPath, map: false });
         const rewritten = rewriteAppStyleImports(processed.css, stylesMap);
         const fileName = await emitAppProductionCss(config, rewritten);
@@ -171,18 +174,39 @@ async function processAppCss(
     return {};
 }
 
-async function createPostcssProcessor(config: BuilderContext['config']): Promise<postcss.Processor> {
+function createPostcssProcessor(): postcss.Processor {
+    return postcss([customMedia(), autoprefixer]);
+}
+
+async function loadCustomMediaPrelude(config: BuilderContext['config']): Promise<string> {
     const tokensPath = path.join(config.paths.src.app, 'styles', 'tokens.css');
-    const importFrom: string[] = [];
-    if (await pathExists(tokensPath)) {
-        importFrom.push(tokensPath);
+    if (!(await pathExists(tokensPath))) {
+        return '';
     }
 
-    const customMediaPlugin = importFrom.length > 0
-        ? customMedia({ importFrom } as any)
-        : customMedia();
+    const contents = await readFile(tokensPath);
+    const matches = contents.match(/^[\t ]*@custom-media[^\n]*;[\t ]*$/gm) ?? [];
+    if (matches.length === 0) {
+        return '';
+    }
 
-    return postcss([customMediaPlugin, autoprefixer]);
+    return `${matches.join('\n')}\n`;
+}
+
+function applyCustomMediaPrelude(css: string, prelude: string): string {
+    if (!prelude) {
+        return css;
+    }
+
+    if (!css.includes('@media (--')) {
+        return css;
+    }
+
+    if (css.includes('@custom-media')) {
+        return css;
+    }
+
+    return `${prelude}${css}`;
 }
 
 async function emitAppDevelopmentCss(config: BuilderContext['config'], css: string): Promise<void> {
@@ -393,7 +417,8 @@ async function inlineAppImport(relativePath: string, distRoot: string, seen: Set
 
 async function emitAppStylesProduction(
     config: BuilderContext['config'],
-    processor: postcss.Processor
+    processor: postcss.Processor,
+    customMediaPrelude: string
 ): Promise<Map<string, string>> {
     const sourceDir = path.join(config.paths.src.app, 'styles');
     const mapping = new Map<string, string>();
@@ -410,7 +435,8 @@ async function emitAppStylesProduction(
     const files = await glob('**/*.css', { cwd: sourceDir, nodir: true });
     for (const relative of files) {
         const sourcePath = path.join(sourceDir, relative);
-        const processed = await processor.process(await readFile(sourcePath), { from: sourcePath, map: false });
+        const source = applyCustomMediaPrelude(await readFile(sourcePath), customMediaPrelude);
+        const processed = await processor.process(source, { from: sourcePath, map: false });
         const minified = csso.minify(processed.css).css;
         const hash = hashContent(minified);
         const parsed = path.parse(relative);
