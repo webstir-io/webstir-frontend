@@ -179,7 +179,7 @@ async function createPostcssProcessor(config: BuilderContext['config']): Promise
     }
 
     const customMediaPlugin = importFrom.length > 0
-        ? customMedia({ importFrom })
+        ? customMedia({ importFrom } as any)
         : customMedia();
 
     return postcss([customMediaPlugin, autoprefixer]);
