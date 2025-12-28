@@ -810,26 +810,11 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
     const docsLayoutHtml = [
         '<section class="docs-layout" data-scope="docs">',
         '  <div class="ws-container docs-layout__inner">',
-        '    <aside class="docs-sidebar" aria-label="Docs navigation">',
-        '      <div class="docs-sidebar__header">',
-        '        <a class="docs-sidebar__title" href="/docs/">Docs</a>',
-        '      </div>',
-        '      <nav class="docs-nav" aria-label="Docs pages">',
-        '        <ul id="docs-links" class="docs-links"></ul>',
-        '      </nav>',
-        '    </aside>',
         '    <div class="docs-main">',
         `      <article class="docs-article">${bodyHtml}</article>`,
         '    </div>',
-        '    <aside class="docs-toc" aria-label="On this page" hidden>',
-        '      <div class="docs-toc__title">On this page</div>',
-        '      <nav class="docs-toc__nav">',
-        '        <ul id="docs-toc" class="docs-toc__links"></ul>',
-        '      </nav>',
-        '    </aside>',
         '  </div>',
-        '</section>',
-        `<script type="module" src="/${FOLDERS.pages}/docs/index.js"></script>`
+        '</section>'
     ].join('\n');
 
     main.html(docsLayoutHtml);
