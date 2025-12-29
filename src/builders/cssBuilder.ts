@@ -170,7 +170,7 @@ async function processAppCss(
     const stylesVersion = await computeAppStylesVersion(config.paths.src.app);
     const rewritten = rewriteAppStyleImportsForDevelopment(processed.css, stylesVersion);
     await emitAppDevelopmentCss(config, rewritten);
-    await syncAppStyles(config.paths.src.app, path.join(config.paths.build.frontend, FOLDERS.app));
+    await syncAppStyles(config.paths.src.app, path.join(config.paths.build.frontend, FOLDERS.app), processor, customMediaPrelude);
     return {};
 }
 
@@ -246,15 +246,35 @@ async function emitAppProductionCss(config: BuilderContext['config'], css: strin
     return fileName;
 }
 
-async function syncAppStyles(sourceAppDir: string, destinationAppDir: string): Promise<void> {
+async function syncAppStyles(
+    sourceAppDir: string,
+    destinationAppDir: string,
+    processor: postcss.Processor,
+    customMediaPrelude: string
+): Promise<void> {
     const stylesSource = path.join(sourceAppDir, 'styles');
     if (!(await pathExists(stylesSource))) {
         return;
     }
 
     const stylesDestination = path.join(destinationAppDir, 'styles');
-    await ensureDir(path.dirname(stylesDestination));
-    await copy(stylesSource, stylesDestination);
+    await ensureDir(stylesDestination);
+
+    const files = await glob('**/*', { cwd: stylesSource, nodir: true });
+    for (const relative of files) {
+        const sourcePath = path.join(stylesSource, relative);
+        const destinationPath = path.join(stylesDestination, relative);
+        await ensureDir(path.dirname(destinationPath));
+
+        if (!relative.endsWith(EXTENSIONS.css)) {
+            await copy(sourcePath, destinationPath);
+            continue;
+        }
+
+        const source = applyCustomMediaPrelude(await readFile(sourcePath), customMediaPrelude);
+        const processed = await processor.process(source, { from: sourcePath, map: { inline: true } });
+        await writeFile(destinationPath, processed.css);
+    }
 }
 
 async function computeAppStylesVersion(sourceAppDir: string): Promise<string> {
