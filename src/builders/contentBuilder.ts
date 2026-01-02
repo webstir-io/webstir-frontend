@@ -111,7 +111,13 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
         const pagePath = path.join(...segments);
         const pageTitle = resolveTitle(frontmatter, content, segments);
 
-        const mergedHtml = mergeContentIntoTemplate(templateHtml, pageTitle, htmlBody, frontmatter.description);
+        const mergedHtml = mergeContentIntoTemplate(
+            templateHtml,
+            pageTitle,
+            htmlBody,
+            frontmatter.description,
+            context.enable?.contentNav === true
+        );
         const mergedWithOptIn = injectGlobalOptInScripts(mergedHtml, context.enable);
 
         // Write to build (folder index)
@@ -173,7 +179,13 @@ async function publishContentPages(context: BuilderContext): Promise<void> {
         const rendered = await renderMarkdownDoc(content);
         const htmlBody = rendered.html;
 
-        const mergedHtml = mergeContentIntoTemplate(templateHtml, pageTitle, htmlBody, frontmatter.description);
+        const mergedHtml = mergeContentIntoTemplate(
+            templateHtml,
+            pageTitle,
+            htmlBody,
+            frontmatter.description,
+            context.enable?.contentNav === true
+        );
         const mergedWithOptIn = injectGlobalOptInScripts(mergedHtml, context.enable);
         const rewritten = await rewriteContentForPublish(mergedWithOptIn, shared, docsManifest);
 
@@ -738,7 +750,13 @@ function validateAppTemplate(html: string, filePath: string): void {
     }
 }
 
-function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: string, description?: string): string {
+function mergeContentIntoTemplate(
+    appHtml: string,
+    pageName: string,
+    bodyHtml: string,
+    description: string | undefined,
+    enableContentNav: boolean
+): string {
     const document = load(appHtml);
 
     const main = document('main').first();
@@ -807,15 +825,56 @@ function mergeContentIntoTemplate(appHtml: string, pageName: string, bodyHtml: s
         ensureMetaName(head, 'twitter:description', effectiveDescription);
     }
 
-    const docsLayoutHtml = [
-        '<section class="docs-layout" data-scope="docs">',
-        '  <div class="ws-container docs-layout__inner">',
-        '    <div class="docs-main ws-flow">',
-        `      <article class="docs-article ws-markdown">${bodyHtml}</article>`,
-        '    </div>',
-        '  </div>',
-        '</section>'
-    ].join('\n');
+    const docsLayoutHtml = enableContentNav
+        ? [
+            '<section class="docs-layout" data-scope="docs" data-content-nav="true">',
+            '  <div class="ws-container docs-layout__inner">',
+            '    <aside class="docs-sidebar" id="docs-sidebar" data-docs-sidebar hidden>',
+            '      <div class="docs-panel__header">',
+            '        <span class="docs-panel__title">Documentation</span>',
+            '      </div>',
+            '      <nav class="docs-nav" data-docs-nav aria-label="Docs navigation" hidden></nav>',
+            '    </aside>',
+            '    <div class="docs-main">',
+            '      <div class="docs-toolbar" data-docs-toolbar hidden>',
+            '        <button class="docs-toolbar__toggle ws-icon-button" type="button" data-docs-nav-toggle aria-controls="docs-sidebar" aria-expanded="false" hidden>',
+            '          <span class="docs-toolbar__icon" aria-hidden="true">',
+            '            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">',
+            '              <path d="M4 7h16"></path>',
+            '              <path d="M4 12h16"></path>',
+            '              <path d="M4 17h16"></path>',
+            '            </svg>',
+            '          </span>',
+            '          <span class="sr-only">Toggle docs navigation</span>',
+            '        </button>',
+            '        <nav class="docs-breadcrumb" data-docs-breadcrumb aria-label="Breadcrumb" hidden></nav>',
+            '        <button class="docs-toolbar__toggle ws-icon-button" type="button" data-docs-toc-toggle aria-controls="docs-toc" aria-expanded="false" hidden>',
+            '          <span class="docs-toolbar__icon" aria-hidden="true">#</span>',
+            '          <span class="sr-only">Toggle table of contents</span>',
+            '        </button>',
+            '      </div>',
+            '      <div class="docs-main__content ws-flow">',
+            `        <article class="docs-article ws-markdown" data-docs-article>${bodyHtml}</article>`,
+            '      </div>',
+            '    </div>',
+            '    <aside class="docs-toc" id="docs-toc" data-docs-toc hidden>',
+            '      <div class="docs-panel__header">',
+            '        <span class="docs-panel__title">On this page</span>',
+            '      </div>',
+            '      <nav class="docs-toc__nav" data-docs-toc-nav aria-label="On this page" hidden></nav>',
+            '    </aside>',
+            '  </div>',
+            '</section>'
+        ].join('\n')
+        : [
+            '<section class="docs-layout" data-scope="docs">',
+            '  <div class="ws-container docs-layout__inner">',
+            '    <div class="docs-main ws-flow">',
+            `      <article class="docs-article ws-markdown">${bodyHtml}</article>`,
+            '    </div>',
+            '  </div>',
+            '</section>'
+        ].join('\n');
 
     main.html(docsLayoutHtml);
 

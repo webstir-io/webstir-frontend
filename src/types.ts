@@ -18,6 +18,7 @@ export interface EnableFlags {
     readonly clientNav?: boolean;
     readonly backend?: boolean;
     readonly search?: boolean;
+    readonly contentNav?: boolean;
 }
 
 export interface FrontendPathConfig {

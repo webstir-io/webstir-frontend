@@ -219,6 +219,13 @@ async function assertFeatureModulesPresent(config: BuilderContext['config'], ena
         }
     }
 
+    if (enable.contentNav === true) {
+        const hasContentNav = await hasFeatureModule(config, 'content-nav');
+        if (!hasContentNav) {
+            missing.push('content-nav');
+        }
+    }
+
     if (missing.length === 0) {
         return;
     }
