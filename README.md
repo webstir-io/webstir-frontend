@@ -135,16 +135,18 @@ the provider:
 
 ```bash
 npm install
+npm run clean          # remove dist artifacts
 npm run build          # TypeScript → dist/
 npm run test           # Node --test against compiled output
-# Optional quick E2E
 npm run smoke          # scaffolds a temp workspace and runs build/publish
+# Release helper (bumps version, pushes tags to trigger release workflow)
+npm run release -- patch
 ```
 
-GitHub Actions should run `npm ci`, `npm run build`, and `npm run test` before publishing. The package publishes to GitHub Packages per `publishConfig`.
+GitHub Actions should run `npm ci`, `npm run clean`, `npm run build`, `npm run test`, and `npm run smoke` before publishing. The package publishes to GitHub Packages per `publishConfig`.
 
 CI notes
-- Package CI runs build + tests on PRs and main; a smoke step runs on main only to exercise the end-to-end path quickly.
+- Package CI runs clean + build + tests + smoke on PRs and main.
 
 ## Troubleshooting
 
