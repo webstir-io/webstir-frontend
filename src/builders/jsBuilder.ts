@@ -1,10 +1,10 @@
 import path from 'node:path';
-import { build as esbuild } from 'esbuild';
+import { build as esbuild, type Metafile } from 'esbuild';
 import { glob } from 'glob';
 import { FOLDERS, FILES, EXTENSIONS } from '../core/constants.js';
 import type { Builder, BuilderContext } from './types.js';
 import { getPages } from '../core/pages.js';
-import { ensureDir, pathExists, copy, remove } from '../utils/fs.js';
+import { ensureDir, pathExists, copy, remove, stat } from '../utils/fs.js';
 import { updatePageManifest, updateSharedAssets, readSharedAssets } from '../assets/assetManifest.js';
 import { createCompressedVariants } from '../assets/precompression.js';
 import { shouldProcess } from '../utils/changedFile.js';
@@ -96,19 +96,10 @@ async function compileAppTypeScript(config: BuilderContext['config'], isProducti
             logLevel: 'silent'
         });
 
-        const outputs = result.metafile?.outputs ?? {};
-        const entryOutput = Object.entries(outputs).find(([, meta]) => {
-            if (!meta.entryPoint) {
-                return false;
-            }
-            return path.resolve(meta.entryPoint) === path.resolve(entryPoint);
-        });
-
-        if (!entryOutput) {
+        const fileName = await resolveAppBundleName(outputDir, entryPoint, result.metafile);
+        if (!fileName) {
             throw new Error(`esbuild did not produce an app bundle for ${entryPoint}.`);
         }
-
-        const fileName = path.basename(entryOutput[0]);
         const absolutePath = path.join(outputDir, fileName);
 
         if (config.features.precompression) {
@@ -307,6 +298,45 @@ async function hasFeatureModule(config: BuilderContext['config'], name: string):
     const root = path.join(config.paths.src.app, 'scripts', 'features');
     return await pathExists(path.join(root, `${name}${EXTENSIONS.ts}`))
         || await pathExists(path.join(root, `${name}${EXTENSIONS.js}`));
+}
+
+async function resolveAppBundleName(
+    outputDir: string,
+    entryPoint: string,
+    metafile?: Metafile
+): Promise<string | null> {
+    const outputs = metafile?.outputs ?? {};
+    const outputEntries = Object.entries(outputs) as Array<[string, Metafile['outputs'][string]]>;
+    const entryOutput = outputEntries.find(([, meta]) => {
+        if (!meta.entryPoint) {
+            return false;
+        }
+        return path.resolve(meta.entryPoint) === path.resolve(entryPoint);
+    });
+
+    if (entryOutput) {
+        return path.basename(entryOutput[0]);
+    }
+
+    const matches = await glob('app-*.js', { cwd: outputDir, nodir: true });
+    if (matches.length === 0) {
+        return null;
+    }
+
+    if (matches.length === 1) {
+        return matches[0] ?? null;
+    }
+
+    let latest: { name: string; time: number } | null = null;
+    for (const name of matches) {
+        const info = await stat(path.join(outputDir, name));
+        const time = info.mtimeMs;
+        if (!latest || time > latest.time) {
+            latest = { name, time };
+        }
+    }
+
+    return latest?.name ?? matches[0] ?? null;
 }
 
 async function resolveAppEntry(appRoot: string): Promise<string | null> {
