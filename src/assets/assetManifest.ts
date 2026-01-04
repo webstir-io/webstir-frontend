@@ -13,6 +13,7 @@ export interface AssetManifest {
 
 export interface SharedAssets {
     css?: string;
+    js?: string;
 }
 
 const MANIFEST_FILENAME = 'manifest.json';

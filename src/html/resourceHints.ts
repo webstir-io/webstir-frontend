@@ -1,5 +1,5 @@
 import type { CheerioAPI } from 'cheerio';
-import { FILES, FOLDERS, EXTENSIONS } from '../core/constants.js';
+import { resolvePageHtmlUrl } from '../utils/pagePaths.js';
 
 export interface ResourceHintResult {
     readonly added: number;
@@ -7,9 +7,14 @@ export interface ResourceHintResult {
     readonly missingHead: boolean;
 }
 
-export function injectResourceHints(document: CheerioAPI, currentPage: string): ResourceHintResult {
+export function injectResourceHints(
+    document: CheerioAPI,
+    currentPage: string,
+    pagesUrlPrefix: string,
+    useRootIndex: boolean
+): ResourceHintResult {
     const head = document('head').first();
-    const pages = [...collectInternalPages(document, currentPage)];
+    const pages = [...collectInternalPages(document, currentPage, pagesUrlPrefix)];
 
     if (head.length === 0) {
         return {
@@ -24,18 +29,18 @@ export function injectResourceHints(document: CheerioAPI, currentPage: string): 
     }
 
     for (const page of pages) {
-        const href = `/${FOLDERS.pages}/${page}/${FILES.index}${EXTENSIONS.html}`;
+        const href = resolvePageHtmlUrl(pagesUrlPrefix, page, useRootIndex);
         head.append(`\n<link rel="prefetch" href="${href}" as="document">`);
     }
 
     return { added: pages.length, candidates: pages, missingHead: false };
 }
 
-function collectInternalPages(document: CheerioAPI, currentPage: string): Set<string> {
+function collectInternalPages(document: CheerioAPI, currentPage: string, pagesUrlPrefix: string): Set<string> {
     const pages = new Set<string>();
     document('a[href]').each((_index, element) => {
         const href = document(element).attr('href');
-        const pageName = normalizePageName(href);
+        const pageName = normalizePageName(href, pagesUrlPrefix);
         if (!pageName || pageName === currentPage) {
             return;
         }
@@ -44,7 +49,7 @@ function collectInternalPages(document: CheerioAPI, currentPage: string): Set<st
     return pages;
 }
 
-function normalizePageName(href?: string): string | null {
+function normalizePageName(href: string | undefined, pagesUrlPrefix: string): string | null {
     if (!href || href.length === 0) {
         return null;
     }
@@ -63,8 +68,9 @@ function normalizePageName(href?: string): string | null {
         path = path.slice(1);
     }
 
-    if (path.startsWith(`${FOLDERS.pages}/`)) {
-        path = path.slice(FOLDERS.pages.length + 1);
+    const prefix = trimSlashes(pagesUrlPrefix);
+    if (prefix && path.startsWith(`${prefix}/`)) {
+        path = path.slice(prefix.length + 1);
     }
 
     if (path.endsWith('/')) {
@@ -78,4 +84,8 @@ function normalizePageName(href?: string): string | null {
     }
 
     return candidate;
+}
+
+function trimSlashes(value: string): string {
+    return value.replace(/^\/+|\/+$/g, '');
 }

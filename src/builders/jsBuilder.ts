@@ -5,12 +5,13 @@ import { FOLDERS, FILES, EXTENSIONS } from '../core/constants.js';
 import type { Builder, BuilderContext } from './types.js';
 import { getPages } from '../core/pages.js';
 import { ensureDir, pathExists, copy, remove } from '../utils/fs.js';
-import { updatePageManifest } from '../assets/assetManifest.js';
+import { updatePageManifest, updateSharedAssets, readSharedAssets } from '../assets/assetManifest.js';
 import { createCompressedVariants } from '../assets/precompression.js';
 import { shouldProcess } from '../utils/changedFile.js';
 import { findPageFromChangedFile } from '../utils/pathMatch.js';
 
 const ENTRY_EXTENSIONS = ['.ts', '.tsx', '.js'];
+const APP_ENTRY_BASENAME = 'app';
 
 export function createJavaScriptBuilder(context: BuilderContext): Builder {
     return {
@@ -71,6 +72,70 @@ async function compileAppTypeScript(config: BuilderContext['config'], isProducti
         return;
     }
 
+    if (isProduction) {
+        const entryPoint = await resolveAppEntry(appRoot);
+        if (!entryPoint) {
+            return;
+        }
+
+        const outputDir = path.join(config.paths.dist.frontend, FOLDERS.app);
+        await ensureDir(outputDir);
+
+        const result = await esbuild({
+            entryPoints: [entryPoint],
+            outdir: outputDir,
+            format: 'esm',
+            target: 'es2020',
+            platform: 'browser',
+            minify: true,
+            sourcemap: false,
+            bundle: true,
+            entryNames: 'app-[hash]',
+            assetNames: 'assets/[name]-[hash]',
+            metafile: true,
+            logLevel: 'silent'
+        });
+
+        const outputs = result.metafile?.outputs ?? {};
+        const entryOutput = Object.entries(outputs).find(([, meta]) => {
+            if (!meta.entryPoint) {
+                return false;
+            }
+            return path.resolve(meta.entryPoint) === path.resolve(entryPoint);
+        });
+
+        if (!entryOutput) {
+            throw new Error(`esbuild did not produce an app bundle for ${entryPoint}.`);
+        }
+
+        const fileName = path.basename(entryOutput[0]);
+        const absolutePath = path.join(outputDir, fileName);
+
+        if (config.features.precompression) {
+            await createCompressedVariants(absolutePath);
+        } else {
+            await Promise.all([
+                remove(`${absolutePath}${EXTENSIONS.br}`).catch(() => undefined),
+                remove(`${absolutePath}${EXTENSIONS.gz}`).catch(() => undefined)
+            ]);
+        }
+
+        const existing = await readSharedAssets(config.paths.dist.frontend);
+        const previousFile = existing?.js;
+        if (previousFile && previousFile !== fileName) {
+            const previousPath = path.join(outputDir, previousFile);
+            await remove(previousPath).catch(() => undefined);
+            await remove(`${previousPath}${EXTENSIONS.br}`).catch(() => undefined);
+            await remove(`${previousPath}${EXTENSIONS.gz}`).catch(() => undefined);
+        }
+
+        await updateSharedAssets(config.paths.dist.frontend, shared => {
+            shared.js = fileName;
+        });
+
+        return;
+    }
+
     const entryPoints = (await glob('**/*.{ts,tsx}', { cwd: appRoot, nodir: true }))
         .filter((relativePath) => !relativePath.endsWith('.d.ts'))
         .map((relativePath) => path.join(appRoot, relativePath));
@@ -98,7 +163,7 @@ async function compileAppTypeScript(config: BuilderContext['config'], isProducti
 }
 
 async function buildForDevelopment(config: BuilderContext['config'], pageName: string, entryPoint: string): Promise<void> {
-    const outputDir = path.join(config.paths.build.frontend, FOLDERS.pages, pageName);
+    const outputDir = path.join(config.paths.build.pages, pageName);
     await ensureDir(outputDir);
     const outfile = path.join(outputDir, `${FILES.index}${EXTENSIONS.js}`);
 
@@ -115,7 +180,7 @@ async function buildForDevelopment(config: BuilderContext['config'], pageName: s
 }
 
 async function buildForProduction(config: BuilderContext['config'], pageName: string, entryPoint: string): Promise<void> {
-    const outputDir = path.join(config.paths.dist.frontend, FOLDERS.pages, pageName);
+    const outputDir = path.join(config.paths.dist.pages, pageName);
     await ensureDir(outputDir);
 
     const result = await esbuild({
@@ -242,4 +307,22 @@ async function hasFeatureModule(config: BuilderContext['config'], name: string):
     const root = path.join(config.paths.src.app, 'scripts', 'features');
     return await pathExists(path.join(root, `${name}${EXTENSIONS.ts}`))
         || await pathExists(path.join(root, `${name}${EXTENSIONS.js}`));
+}
+
+async function resolveAppEntry(appRoot: string): Promise<string | null> {
+    const candidates = [
+        `${APP_ENTRY_BASENAME}${EXTENSIONS.ts}`,
+        `${APP_ENTRY_BASENAME}.tsx`,
+        `${APP_ENTRY_BASENAME}${EXTENSIONS.js}`,
+        `${APP_ENTRY_BASENAME}.jsx`
+    ];
+
+    for (const candidate of candidates) {
+        const fullPath = path.join(appRoot, candidate);
+        if (await pathExists(fullPath)) {
+            return fullPath;
+        }
+    }
+
+    return null;
 }

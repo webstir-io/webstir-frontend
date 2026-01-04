@@ -1,21 +1,23 @@
 import path from 'node:path';
 import type { CheerioAPI } from 'cheerio';
-import { FOLDERS, FILES, EXTENSIONS } from '../core/constants.js';
+import { EXTENSIONS } from '../core/constants.js';
 import { pathExists, readFile, stat } from '../utils/fs.js';
+import { resolvePageAssetUrl } from '../utils/pagePaths.js';
 
 const INLINE_THRESHOLD_BYTES = 6 * 1024;
 
 export async function inlineCriticalCss(
     document: CheerioAPI,
     pageName: string,
-    distRoot: string,
+    pagesRoot: string,
+    pagesUrlPrefix: string,
     cssFile?: string
 ): Promise<void> {
     if (!cssFile) {
         return;
     }
 
-    const cssPath = path.join(distRoot, FOLDERS.pages, pageName, cssFile);
+    const cssPath = path.join(pagesRoot, pageName, cssFile);
     if (!(await pathExists(cssPath))) {
         return;
     }
@@ -31,7 +33,7 @@ export async function inlineCriticalCss(
         return;
     }
 
-    const href = `/${FOLDERS.pages}/${pageName}/${cssFile}`;
+    const href = resolvePageAssetUrl(pagesUrlPrefix, pageName, cssFile);
     document(`link[href="${href}"]`).remove();
 
     if (cssFile.endsWith(EXTENSIONS.css)) {

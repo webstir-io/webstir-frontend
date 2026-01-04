@@ -20,7 +20,7 @@ import { inlineCriticalCss } from '../html/criticalCss.js';
 import { findPageFromChangedFile } from '../utils/pathMatch.js';
 import { emitDiagnostic } from '../core/diagnostics.js';
 import type { EnableFlags } from '../types.js';
-import { relativePathWithin } from '../utils/pathMatch.js';
+import { resolvePageAssetUrl, resolvePageHtmlDir, resolvePagesUrlPrefix } from '../utils/pagePaths.js';
 
 export function createHtmlBuilder(context: BuilderContext): Builder {
     return {
@@ -73,7 +73,7 @@ async function buildHtml(context: BuilderContext): Promise<void> {
             continue;
         }
 
-        const targetDir = path.join(config.paths.build.frontend, FOLDERS.pages, page.name);
+        const targetDir = path.join(config.paths.build.pages, page.name);
         await ensureDir(targetDir);
 
         for (const relativeHtml of pageHtmlFiles) {
@@ -102,7 +102,7 @@ async function buildHtml(context: BuilderContext): Promise<void> {
 
 async function publishHtml(context: BuilderContext): Promise<void> {
     const { config } = context;
-    const buildPagesRoot = path.join(config.paths.build.frontend, FOLDERS.pages);
+    const buildPagesRoot = config.paths.build.pages;
     if (!(await pathExists(buildPagesRoot))) {
         warn('Skipping HTML publish because no build artifacts were found. Run build first.');
         return;
@@ -111,26 +111,42 @@ async function publishHtml(context: BuilderContext): Promise<void> {
     const targetPage = findPageFromChangedFile(context.changedFile, config.paths.src.pages);
     const pages = await getPageDirectories(buildPagesRoot);
     const shared = await readSharedAssets(config.paths.dist.frontend);
+    const pagesUrlPrefix = resolvePagesUrlPrefix(config.paths.dist.frontend, config.paths.dist.pages);
+    const buildPagesUrlPrefix = resolvePagesUrlPrefix(config.paths.build.frontend, config.paths.build.pages);
+    const useRootIndex = pagesUrlPrefix.length === 0;
 
     for (const page of pages) {
         if (targetPage && page.name !== targetPage) {
             continue;
         }
-        const distDir = path.join(config.paths.dist.frontend, FOLDERS.pages, page.name);
-        await ensureDir(distDir);
+        const assetDir = path.join(config.paths.dist.pages, page.name);
+        const distDir = resolvePageHtmlDir(config.paths.dist.pages, page.name, useRootIndex);
 
         const htmlFiles = await glob('**/*.html', {
             cwd: page.directory,
             nodir: true
         });
 
-        const manifest = await readPageManifest(distDir, page.name);
+        const manifest = await readPageManifest(assetDir, page.name);
 
         for (const relativeHtml of htmlFiles) {
             const sourcePath = path.join(page.directory, relativeHtml);
             const html = await readFile(sourcePath);
-            const rewritten = await rewriteForPublish(context, html, page.name, manifest, page.directory, shared);
-            const outputPath = path.join(distDir, path.basename(relativeHtml));
+            const rewritten = await rewriteForPublish(
+                context,
+                html,
+                page.name,
+                manifest,
+                page.directory,
+                shared,
+                {
+                    pagesUrlPrefix,
+                    buildPagesUrlPrefix,
+                    useRootIndex
+                }
+            );
+            const outputPath = path.join(distDir, relativeHtml);
+            await ensureDir(path.dirname(outputPath));
             await writeFile(outputPath, rewritten);
             await handlePrecompression(context, outputPath);
         }
@@ -239,27 +255,47 @@ async function rewriteForPublish(
     pageName: string,
     manifest: { js?: string; css?: string },
     pageDirectory: string,
-    shared: { css?: string } | null
+    shared: { css?: string; js?: string } | null,
+    options: {
+        readonly pagesUrlPrefix: string;
+        readonly buildPagesUrlPrefix: string;
+        readonly useRootIndex: boolean;
+    }
 ): Promise<string> {
     const document = load(html);
+    const { pagesUrlPrefix, buildPagesUrlPrefix, useRootIndex } = options;
+    const buildScriptHref = resolvePageAssetUrl(buildPagesUrlPrefix, pageName, `${FILES.index}${EXTENSIONS.js}`);
+    const buildCssHref = resolvePageAssetUrl(buildPagesUrlPrefix, pageName, `${FILES.index}${EXTENSIONS.css}`);
 
     removeDevScripts(document);
 
     if (shared?.css) {
         document(`link[href="/app/app.css"]`).attr('href', `/app/${shared.css}`);
     }
-
-    if (manifest.js) {
-        const selector = `script[src="${FILES.index}${EXTENSIONS.js}"]`;
-        document(selector).attr('src', `/${FOLDERS.pages}/${pageName}/${manifest.js}`);
-        document(selector).attr('type', 'module');
-    } else {
-        document(`script[src="${FILES.index}${EXTENSIONS.js}"]`).remove();
+    if (shared?.js) {
+        document(`script[src="/app/app.js"]`)
+            .attr('src', `/app/${shared.js}`)
+            .attr('type', 'module');
     }
 
+    const scriptSelector = [
+        `script[src="${FILES.index}${EXTENSIONS.js}"]`,
+        `script[src="${buildScriptHref}"]`
+    ].join(', ');
+    if (manifest.js) {
+        document(scriptSelector)
+            .attr('src', resolvePageAssetUrl(pagesUrlPrefix, pageName, manifest.js))
+            .attr('type', 'module');
+    } else {
+        document(scriptSelector).remove();
+    }
+
+    const cssSelector = [
+        `link[href="${FILES.index}${EXTENSIONS.css}"]`,
+        `link[href="${buildCssHref}"]`
+    ].join(', ');
     if (manifest.css) {
-        const selector = `link[href="${FILES.index}${EXTENSIONS.css}"]`;
-        document(selector).attr('href', `/${FOLDERS.pages}/${pageName}/${manifest.css}`);
+        document(cssSelector).attr('href', resolvePageAssetUrl(pagesUrlPrefix, pageName, manifest.css));
     }
 
     applyLazyLoading(document);
@@ -269,7 +305,7 @@ async function rewriteForPublish(
     }
 
     if (context.config.features.htmlSecurity) {
-        await inlineCriticalCss(document, pageName, context.config.paths.dist.frontend, manifest.css);
+        await inlineCriticalCss(document, pageName, context.config.paths.dist.pages, pagesUrlPrefix, manifest.css);
         const sriResult = await addSubresourceIntegrity(document);
         if (sriResult.failures.length > 0) {
             const resources = sriResult.failures;
@@ -287,7 +323,7 @@ async function rewriteForPublish(
             });
         }
 
-        const hints = injectResourceHints(document, pageName);
+        const hints = injectResourceHints(document, pageName, pagesUrlPrefix, useRootIndex);
         if (hints.missingHead) {
             emitDiagnostic({
                 code: 'frontend.resourceHints.missingHead',

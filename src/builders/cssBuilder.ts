@@ -72,7 +72,7 @@ async function processCss(context: BuilderContext, isProduction: boolean): Promi
             await emitDevelopmentCss(config, page.name, normalized);
             await syncPageCssAssetsForDevelopment(
                 page.directory,
-                path.join(config.paths.build.frontend, FOLDERS.pages, page.name),
+                path.join(config.paths.build.pages, page.name),
                 entryPath
             );
         }
@@ -80,7 +80,7 @@ async function processCss(context: BuilderContext, isProduction: boolean): Promi
 }
 
 async function emitDevelopmentCss(config: BuilderContext['config'], pageName: string, css: string): Promise<void> {
-    const outputDir = path.join(config.paths.build.frontend, FOLDERS.pages, pageName);
+    const outputDir = path.join(config.paths.build.pages, pageName);
     await ensureDir(outputDir);
     const outputPath = path.join(outputDir, `${FILES.index}${EXTENSIONS.css}`);
     await writeFile(outputPath, css);
@@ -90,7 +90,7 @@ async function emitProductionCss(config: BuilderContext['config'], pageName: str
     const minified = csso.minify(css).css;
     const hash = hashContent(minified);
     const fileName = `${FILES.index}-${hash}${EXTENSIONS.css}`;
-    const outputDir = path.join(config.paths.dist.frontend, FOLDERS.pages, pageName);
+    const outputDir = path.join(config.paths.dist.pages, pageName);
     await ensureDir(outputDir);
     const outputPath = path.join(outputDir, fileName);
     await writeFile(outputPath, minified);
@@ -159,7 +159,8 @@ async function processAppCss(
         const stylesMap = await emitAppStylesProduction(config, processor, customMediaPrelude);
         const processed = await processor.process(source, { from: appCssPath, map: false });
         const rewritten = rewriteAppStyleImports(processed.css, stylesMap);
-        const fileName = await emitAppProductionCss(config, rewritten);
+        const inlined = await inlineAppImports(rewritten, config.paths.dist.frontend);
+        const fileName = await emitAppProductionCss(config, inlined);
         await updateSharedAssets(config.paths.dist.frontend, shared => {
             shared.css = fileName;
         });
@@ -216,7 +217,8 @@ async function emitAppDevelopmentCss(config: BuilderContext['config'], css: stri
 }
 
 async function emitAppProductionCss(config: BuilderContext['config'], css: string): Promise<string> {
-    const minified = csso.minify(css).css;
+    const { css: stripped, layerOrder } = stripAppLayerOrderStatement(css);
+    const minified = restoreAppLayerOrderStatement(csso.minify(stripped).css, layerOrder);
     const hash = hashContent(minified);
     const fileName = `${APP_CSS_BASENAME}-${hash}${EXTENSIONS.css}`;
     const outputDir = path.join(config.paths.dist.frontend, FOLDERS.app);
@@ -503,6 +505,36 @@ function normalizeForwardSlashes(value: string): string {
 
 function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
+}
+
+function stripAppLayerOrderStatement(css: string): { css: string; layerOrder?: string } {
+    const layerMatch = css.match(/@layer[^;]*;/);
+    if (!layerMatch || layerMatch.index === undefined) {
+        return { css };
+    }
+
+    const layerText = layerMatch[0];
+    if (layerText.includes('{')) {
+        return { css };
+    }
+
+    const withoutLayer = css.slice(0, layerMatch.index) + css.slice(layerMatch.index + layerText.length);
+    return { css: withoutLayer, layerOrder: layerText.trim() };
+}
+
+function restoreAppLayerOrderStatement(css: string, layerOrder?: string): string {
+    if (!layerOrder) {
+        return css;
+    }
+
+    const charsetMatch = css.match(/^@charset[^;]*;/);
+    if (charsetMatch && charsetMatch.index === 0) {
+        const charsetText = charsetMatch[0];
+        const rest = css.slice(charsetText.length);
+        return `${charsetText}${layerOrder}${rest}`;
+    }
+
+    return `${layerOrder}${css}`;
 }
 
 async function resolveCssEntry(pageDirectory: string): Promise<string | null> {

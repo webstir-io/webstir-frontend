@@ -11,6 +11,7 @@ import type { Builder, BuilderContext } from './types.js';
 import { shouldProcess } from '../utils/changedFile.js';
 import { getPageDirectories } from '../core/pages.js';
 import { readPageManifest, readSharedAssets } from '../assets/assetManifest.js';
+import { resolvePageAssetUrl, resolvePagesUrlPrefix } from '../utils/pagePaths.js';
 
 interface ContentFrontmatter {
     title?: string;
@@ -99,7 +100,8 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
     const templateHtml = await readFile(appTemplatePath);
     validateAppTemplate(templateHtml, appTemplatePath);
 
-    await removeStaleContentOutputs(context, files);
+    const buildPagesUrlPrefix = resolvePagesUrlPrefix(config.paths.build.frontend, config.paths.build.pages);
+    await removeStaleContentOutputs(context, files, buildPagesUrlPrefix);
 
     for (const relative of files) {
         const sourcePath = path.join(contentRoot, relative);
@@ -116,12 +118,13 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
             pageTitle,
             htmlBody,
             frontmatter.description,
-            context.enable?.contentNav === true
+            context.enable?.contentNav === true,
+            buildPagesUrlPrefix
         );
         const mergedWithOptIn = injectGlobalOptInScripts(mergedHtml, context.enable);
 
         // Write to build (folder index)
-        const targetDir = path.join(config.paths.build.frontend, FOLDERS.pages, pagePath);
+        const targetDir = path.join(config.paths.build.pages, pagePath);
         await ensureDir(targetDir);
         const targetPath = path.join(targetDir, FILES.indexHtml);
         await writeFile(targetPath, mergedWithOptIn);
@@ -153,10 +156,13 @@ async function publishContentPages(context: BuilderContext): Promise<void> {
     const templateHtml = await readFile(appTemplatePath);
     validateAppTemplate(templateHtml, appTemplatePath);
 
-    await removeStaleContentOutputsForRoots([config.paths.dist.frontend], files);
+    const pagesUrlPrefix = resolvePagesUrlPrefix(config.paths.dist.frontend, config.paths.dist.pages);
+    const buildPagesUrlPrefix = resolvePagesUrlPrefix(config.paths.build.frontend, config.paths.build.pages);
+    await removeStaleContentOutputsForRoot(config.paths.dist.content, files, pagesUrlPrefix);
 
     const shared = await readSharedAssets(config.paths.dist.frontend);
-    const docsManifest = await readPageManifest(config.paths.dist.frontend, 'docs');
+    const docsManifestRoot = path.join(config.paths.dist.pages, 'docs');
+    const docsManifest = await readPageManifest(docsManifestRoot, 'docs');
 
     if (!docsManifest.css || !docsManifest.js) {
         throw new Error(
@@ -184,12 +190,16 @@ async function publishContentPages(context: BuilderContext): Promise<void> {
             pageTitle,
             htmlBody,
             frontmatter.description,
-            context.enable?.contentNav === true
+            context.enable?.contentNav === true,
+            pagesUrlPrefix
         );
         const mergedWithOptIn = injectGlobalOptInScripts(mergedHtml, context.enable);
-        const rewritten = await rewriteContentForPublish(mergedWithOptIn, shared, docsManifest);
+        const rewritten = await rewriteContentForPublish(mergedWithOptIn, shared, docsManifest, {
+            pagesUrlPrefix,
+            buildPagesUrlPrefix
+        });
 
-        const distDir = path.join(config.paths.dist.frontend, FOLDERS.pages, pagePath);
+        const distDir = path.join(config.paths.dist.pages, pagePath);
         const distPath = path.join(distDir, FILES.indexHtml);
 
         renderedPages.push({
@@ -210,25 +220,27 @@ async function publishContentPages(context: BuilderContext): Promise<void> {
     }
 }
 
-async function removeStaleContentOutputs(context: BuilderContext, contentFiles: readonly string[]): Promise<void> {
-    await removeStaleContentOutputsForRoots([context.config.paths.build.frontend], contentFiles);
+async function removeStaleContentOutputs(
+    context: BuilderContext,
+    contentFiles: readonly string[],
+    pagesUrlPrefix: string
+): Promise<void> {
+    await removeStaleContentOutputsForRoot(context.config.paths.build.content, contentFiles, pagesUrlPrefix);
 }
 
-async function removeStaleContentOutputsForRoots(outputRoots: readonly string[], contentFiles: readonly string[]): Promise<void> {
+async function removeStaleContentOutputsForRoot(
+    docsRoot: string,
+    contentFiles: readonly string[],
+    pagesUrlPrefix: string
+): Promise<void> {
+    if (!(await pathExists(docsRoot))) {
+        return;
+    }
+
     const expected = new Set<string>();
     for (const relative of contentFiles) {
         const segments = resolveDocsSegments(relative);
         expected.add(path.join(...segments.slice(1)));
-    }
-
-    for (const outputRoot of outputRoots) {
-        await removeStaleContentOutputsForRoot(path.join(outputRoot, FOLDERS.pages, 'docs'), expected);
-    }
-}
-
-async function removeStaleContentOutputsForRoot(docsRoot: string, expected: ReadonlySet<string>): Promise<void> {
-    if (!(await pathExists(docsRoot))) {
-        return;
     }
 
     const candidateIndexes = await glob('**/index.html', {
@@ -236,8 +248,11 @@ async function removeStaleContentOutputsForRoot(docsRoot: string, expected: Read
         nodir: true
     });
 
+    const docsPrefix = resolvePageAssetUrl(pagesUrlPrefix, 'docs', '');
+    const docsAssetToken = docsPrefix.endsWith('/') ? docsPrefix : `${docsPrefix}/`;
+
     for (const relativeIndex of candidateIndexes) {
-        // Keep the docs hub at `/docs/` (pages/docs/index.html).
+        // Keep the docs hub at `/docs/` (index.html).
         if (relativeIndex === FILES.indexHtml) {
             continue;
         }
@@ -252,7 +267,7 @@ async function removeStaleContentOutputsForRoot(docsRoot: string, expected: Read
 
         // Only remove pages that were generated by the content pipeline (avoid deleting user-owned pages under /docs).
         const looksLikeContentOutput = html.includes('class="docs-article"')
-            && html.includes(`/${FOLDERS.pages}/docs/`);
+            && html.includes(docsAssetToken);
         if (!looksLikeContentOutput) {
             continue;
         }
@@ -755,7 +770,8 @@ function mergeContentIntoTemplate(
     pageName: string,
     bodyHtml: string,
     description: string | undefined,
-    enableContentNav: boolean
+    enableContentNav: boolean,
+    pagesUrlPrefix: string
 ): string {
     const document = load(appHtml);
 
@@ -789,7 +805,7 @@ function mergeContentIntoTemplate(
     }
 
     // Ensure docs pages load the docs layout styles.
-    const docsCssHref = `/${FOLDERS.pages}/docs/index.css`;
+    const docsCssHref = resolvePageAssetUrl(pagesUrlPrefix, 'docs', `${FILES.index}${EXTENSIONS.css}`);
     const existingDocsStylesheet =
         head.find(`link[rel="stylesheet"][href="${docsCssHref}"]`).first().length > 0
         || head.find('link[rel="stylesheet"]').toArray().some((element) => {
@@ -1141,10 +1157,15 @@ function injectGlobalOptInScripts(
 
 async function rewriteContentForPublish(
     html: string,
-    shared: { css?: string } | null,
-    docsManifest: { js?: string; css?: string }
+    shared: { css?: string; js?: string } | null,
+    docsManifest: { js?: string; css?: string },
+    options: {
+        readonly pagesUrlPrefix: string;
+        readonly buildPagesUrlPrefix: string;
+    }
 ): Promise<string> {
     const document = load(html);
+    const { pagesUrlPrefix, buildPagesUrlPrefix } = options;
 
     document('script[src="/hmr.js"]').remove();
     document('script[src="/refresh.js"]').remove();
@@ -1152,16 +1173,28 @@ async function rewriteContentForPublish(
     if (shared?.css) {
         document(`link[href="/app/app.css"]`).attr('href', `/app/${shared.css}`);
     }
+    if (shared?.js) {
+        document(`script[src="/app/app.js"]`)
+            .attr('src', `/app/${shared.js}`)
+            .attr('type', 'module');
+    }
 
     if (docsManifest.css) {
-        const selector = `link[href="/${FOLDERS.pages}/docs/${FILES.index}${EXTENSIONS.css}"]`;
-        document(selector).attr('href', `/${FOLDERS.pages}/docs/${docsManifest.css}`);
+        const selector = [
+            `link[href="${resolvePageAssetUrl(pagesUrlPrefix, 'docs', `${FILES.index}${EXTENSIONS.css}`)}"]`,
+            `link[href="${resolvePageAssetUrl(buildPagesUrlPrefix, 'docs', `${FILES.index}${EXTENSIONS.css}`)}"]`
+        ].join(', ');
+        document(selector).attr('href', resolvePageAssetUrl(pagesUrlPrefix, 'docs', docsManifest.css));
     }
 
     if (docsManifest.js) {
-        const selector = `script[src="/${FOLDERS.pages}/docs/${FILES.index}${EXTENSIONS.js}"]`;
-        document(selector).attr('src', `/${FOLDERS.pages}/docs/${docsManifest.js}`);
-        document(selector).attr('type', 'module');
+        const selector = [
+            `script[src="${resolvePageAssetUrl(pagesUrlPrefix, 'docs', `${FILES.index}${EXTENSIONS.js}`)}"]`,
+            `script[src="${resolvePageAssetUrl(buildPagesUrlPrefix, 'docs', `${FILES.index}${EXTENSIONS.js}`)}"]`
+        ].join(', ');
+        document(selector)
+            .attr('src', resolvePageAssetUrl(pagesUrlPrefix, 'docs', docsManifest.js))
+            .attr('type', 'module');
     }
 
     return document.root().html() ?? html;

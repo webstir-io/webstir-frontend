@@ -11,18 +11,11 @@ import { runSsgSeo } from './seo.js';
 export async function applySsgRouting(config: FrontendConfig): Promise<void> {
     const distRoot = config.paths.dist.frontend;
     const distPagesRoot = config.paths.dist.pages;
+    const isRootLayout = path.resolve(distRoot) === path.resolve(distPagesRoot);
 
-    // Ensure a root index.html that aliases the home page when present.
-    const homeIndexPath = path.join(distPagesRoot, FOLDERS.home, FILES.indexHtml);
-    if (await pathExists(homeIndexPath)) {
-        const rootIndexPath = path.join(distRoot, FILES.indexHtml);
-        await ensureDir(path.dirname(rootIndexPath));
-        await copy(homeIndexPath, rootIndexPath);
-    }
-
-    // For each page, create a /<page>/index.html alias to its main HTML file when available.
     const pages = await getPageDirectories(distPagesRoot);
     const pageIndexMap = new Map<string, string>();
+    const rootIndexPath = path.join(distRoot, FILES.indexHtml);
 
     for (const page of pages) {
         const sourceIndex = path.join(page.directory, FILES.indexHtml);
@@ -32,13 +25,32 @@ export async function applySsgRouting(config: FrontendConfig): Promise<void> {
 
         pageIndexMap.set(page.name, sourceIndex);
 
+        if (isRootLayout) {
+            continue;
+        }
+
+        // For each page, create a /<page>/index.html alias to its main HTML file when available.
         const targetDir = path.join(distRoot, page.name);
         await ensureDir(targetDir);
         const targetIndex = path.join(targetDir, FILES.indexHtml);
         await copy(sourceIndex, targetIndex);
     }
 
-    await applyDocsContentAliases(distRoot, distPagesRoot);
+    if (isRootLayout) {
+        if (await pathExists(rootIndexPath)) {
+            pageIndexMap.set(FOLDERS.home, rootIndexPath);
+        }
+    } else {
+        // Ensure a root index.html that aliases the home page when present.
+        const homeIndexPath = path.join(distPagesRoot, FOLDERS.home, FILES.indexHtml);
+        if (await pathExists(homeIndexPath)) {
+            await ensureDir(path.dirname(rootIndexPath));
+            await copy(homeIndexPath, rootIndexPath);
+        }
+
+        await applyDocsContentAliases(distRoot, distPagesRoot);
+    }
+
     await applyStaticPathAliases(config, distRoot, distPagesRoot, pageIndexMap);
 
     const siteUrl = await resolveWorkspaceSiteUrl(config.paths.workspace);
@@ -46,6 +58,10 @@ export async function applySsgRouting(config: FrontendConfig): Promise<void> {
 }
 
 async function applyDocsContentAliases(distRoot: string, distPagesRoot: string): Promise<void> {
+    if (path.resolve(distRoot) === path.resolve(distPagesRoot)) {
+        return;
+    }
+
     const docsRoot = path.join(distPagesRoot, 'docs');
     if (!(await pathExists(docsRoot))) {
         return;
@@ -147,6 +163,10 @@ async function applyStaticPathAliases(
                 normalized === '/'
                     ? path.join(distRoot, FILES.indexHtml)
                     : path.join(distRoot, normalized.replace(/^\/+/, ''), FILES.indexHtml);
+
+            if (path.resolve(sourceIndex) === path.resolve(targetIndex)) {
+                continue;
+            }
 
             await ensureDir(path.dirname(targetIndex));
             await copy(sourceIndex, targetIndex);

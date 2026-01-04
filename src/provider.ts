@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readdir } from 'node:fs/promises';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -17,7 +18,8 @@ import { runPipeline } from './pipeline.js';
 import type { PipelineMode } from './pipeline.js';
 import { prepareWorkspaceConfig } from './config/setup.js';
 import type { FrontendConfig } from './types.js';
-import { readJson } from './utils/fs.js';
+import { FOLDERS } from './core/constants.js';
+import { pathExists, readJson, remove } from './utils/fs.js';
 import { applySsgRouting, assertNoSsgRoutes, generateSsgViewData } from './modes/ssg/index.js';
 
 interface PackageJson {
@@ -46,15 +48,17 @@ async function buildModule(options: ModuleBuildOptions): Promise<ModuleBuildResu
     const frontendMode = normalizeFrontendMode(options.env?.WEBSTIR_FRONTEND_MODE);
     const shouldRunSsgPublish =
         mode === 'publish' && (frontendMode === 'ssg' || (frontendMode === undefined && workspaceMode.mode === 'ssg'));
+    const publishConfig = shouldRunSsgPublish ? applySsgPublishLayout(config) : config;
 
     if (shouldRunSsgPublish) {
         await assertNoSsgRoutes(config.paths.workspace);
     }
-    await runPipeline(config, mode, { changedFile: undefined, enable: workspaceMode.enable });
+    await runPipeline(publishConfig, mode, { changedFile: undefined, enable: workspaceMode.enable });
 
     if (shouldRunSsgPublish) {
-        await generateSsgViewData(config);
-        await applySsgRouting(config);
+        await generateSsgViewData(publishConfig);
+        await applySsgRouting(publishConfig);
+        await removeLegacyPagesFolder(publishConfig);
     }
 
     const artifacts = await collectArtifacts(config);
@@ -64,6 +68,42 @@ async function buildModule(options: ModuleBuildOptions): Promise<ModuleBuildResu
         artifacts,
         manifest
     };
+}
+
+function applySsgPublishLayout(config: FrontendConfig): FrontendConfig {
+    const distFrontend = config.paths.dist.frontend;
+    const distPages = distFrontend;
+    const distContent = path.join(distFrontend, 'docs');
+
+    return {
+        ...config,
+        paths: {
+            ...config.paths,
+            dist: {
+                ...config.paths.dist,
+                pages: distPages,
+                content: distContent
+            }
+        }
+    };
+}
+
+async function removeLegacyPagesFolder(config: FrontendConfig): Promise<void> {
+    const legacyPagesRoot = path.join(config.paths.dist.frontend, FOLDERS.pages);
+    if (legacyPagesRoot === config.paths.dist.pages) {
+        return;
+    }
+
+    if (!(await pathExists(legacyPagesRoot))) {
+        return;
+    }
+
+    const entries = await readdir(legacyPagesRoot);
+    if (entries.length > 0) {
+        return;
+    }
+
+    await remove(legacyPagesRoot);
 }
 
 function normalizeMode(rawMode: unknown): PipelineMode {

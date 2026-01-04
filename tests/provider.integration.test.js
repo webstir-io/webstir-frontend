@@ -108,7 +108,7 @@ test('enable.clientNav uses feature module (no legacy helper injection)', async 
   const distClientNav = path.join(workspace, 'dist', 'frontend', 'clientNav.js');
   assert.equal(fssync.existsSync(distClientNav), false, 'did not expect dist/frontend/clientNav.js');
 
-  const distHtml = await fs.readFile(path.join(workspace, 'dist', 'frontend', 'pages', 'home', 'index.html'), 'utf8');
+  const distHtml = await fs.readFile(path.join(workspace, 'dist', 'frontend', 'index.html'), 'utf8');
   assert.ok(!distHtml.includes('clientNav.js'), 'did not expect client-nav script injected');
   assert.ok(!distHtml.includes('index.js'), 'should not inject page index.js when none exists');
 });
