@@ -1,18 +1,23 @@
 import path from 'node:path';
+import * as cssoModule from 'csso';
 import type { CheerioAPI } from 'cheerio';
 import { EXTENSIONS } from '../core/constants.js';
 import { pathExists, readFile, stat } from '../utils/fs.js';
 import { resolvePageAssetUrl } from '../utils/pagePaths.js';
 
 const INLINE_THRESHOLD_BYTES = 6 * 1024;
-const APP_SHELL_CRITICAL_CSS = `
+const csso = ((cssoModule as unknown as { default?: typeof cssoModule }).default ?? cssoModule) as typeof cssoModule;
+
+function minifyCriticalCss(css: string): string {
+    return csso.minify(css).css;
+}
+
+const APP_SHELL_CRITICAL_CSS = minifyCriticalCss(`
 @layer tokens {
     :root {
         --ws-header-control-size: 2.6rem;
         --ws-header-block-padding: 0.75rem;
-        --ws-header-sticky-offset: calc(
-            var(--ws-header-control-size) + (var(--ws-header-block-padding) * 2) + 1px
-        );
+        --ws-header-sticky-offset: calc(var(--ws-header-control-size) + (var(--ws-header-block-padding) * 2) + 1px);
         --ws-font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
             Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Arial, sans-serif;
     }
@@ -78,8 +83,8 @@ const APP_SHELL_CRITICAL_CSS = `
         height: calc(var(--ws-header-sticky-offset) - 1px);
     }
 }
-`.trim();
-const DOCS_SHELL_CRITICAL_CSS = `
+`.trim());
+const DOCS_SHELL_CRITICAL_CSS = minifyCriticalCss(`
 @layer overrides {
     .docs-layout {
         --ws-docs-sidebar-width: clamp(14rem, 20vw, 18rem);
@@ -125,7 +130,7 @@ const DOCS_SHELL_CRITICAL_CSS = `
         }
     }
 }
-`.trim();
+`.trim());
 
 export async function inlineCriticalCss(
     document: CheerioAPI,
@@ -148,7 +153,7 @@ export async function inlineCriticalCss(
         return;
     }
 
-    const cssContent = await readFile(cssPath);
+    const cssContent = minifyCriticalCss(await readFile(cssPath));
     const head = document('head').first();
     if (head.length === 0) {
         return;
