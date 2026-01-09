@@ -12,6 +12,7 @@ import { shouldProcess } from '../utils/changedFile.js';
 import { getPageDirectories } from '../core/pages.js';
 import { readPageManifest, readSharedAssets } from '../assets/assetManifest.js';
 import { resolvePageAssetUrl, resolvePagesUrlPrefix } from '../utils/pagePaths.js';
+import { ensureDocsShellCriticalCss } from '../html/criticalCss.js';
 
 interface ContentFrontmatter {
     title?: string;
@@ -101,6 +102,10 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
     validateAppTemplate(templateHtml, appTemplatePath);
 
     const buildPagesUrlPrefix = resolvePagesUrlPrefix(config.paths.build.frontend, config.paths.build.pages);
+    const navEntries =
+        context.enable?.contentNav === true
+            ? await collectContentManifests(context)
+            : [];
     await removeStaleContentOutputs(context, files, buildPagesUrlPrefix);
 
     for (const relative of files) {
@@ -111,6 +116,7 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
 
         const segments = resolveDocsSegments(relative);
         const pagePath = path.join(...segments);
+        const href = '/' + segments.join('/') + '/';
         const pageTitle = resolveTitle(frontmatter, content, segments);
 
         const mergedHtml = mergeContentIntoTemplate(
@@ -119,7 +125,9 @@ async function buildContentPages(context: BuilderContext): Promise<void> {
             htmlBody,
             frontmatter.description,
             context.enable?.contentNav === true,
-            buildPagesUrlPrefix
+            buildPagesUrlPrefix,
+            navEntries,
+            href
         );
         const mergedWithOptIn = injectGlobalOptInScripts(mergedHtml, context.enable);
 
@@ -161,6 +169,10 @@ async function publishContentPages(context: BuilderContext): Promise<void> {
     await removeStaleContentOutputsForRoot(config.paths.dist.content, files, pagesUrlPrefix);
 
     const shared = await readSharedAssets(config.paths.dist.frontend);
+    const navEntries =
+        context.enable?.contentNav === true
+            ? await collectContentManifests(context)
+            : [];
     const docsManifestRoot = path.join(config.paths.dist.pages, 'docs');
     const docsManifest = await readPageManifest(docsManifestRoot, 'docs');
 
@@ -191,7 +203,9 @@ async function publishContentPages(context: BuilderContext): Promise<void> {
             htmlBody,
             frontmatter.description,
             context.enable?.contentNav === true,
-            pagesUrlPrefix
+            pagesUrlPrefix,
+            navEntries,
+            href
         );
         const mergedWithOptIn = injectGlobalOptInScripts(mergedHtml, context.enable);
         const rewritten = await rewriteContentForPublish(mergedWithOptIn, shared, docsManifest, {
@@ -771,7 +785,9 @@ function mergeContentIntoTemplate(
     bodyHtml: string,
     description: string | undefined,
     enableContentNav: boolean,
-    pagesUrlPrefix: string
+    pagesUrlPrefix: string,
+    navEntries: readonly DocsNavEntry[],
+    currentPath: string
 ): string {
     const document = load(appHtml);
 
@@ -841,19 +857,24 @@ function mergeContentIntoTemplate(
         ensureMetaName(head, 'twitter:description', effectiveDescription);
     }
 
+    const contentNav =
+        enableContentNav && navEntries.length > 0
+            ? buildContentNavHtml(navEntries, currentPath)
+            : { navHtml: '', breadcrumbHtml: '', ready: false };
+
     const docsLayoutHtml = enableContentNav
         ? [
-            '<section class="docs-layout" data-scope="docs" data-content-nav="true">',
+            `<section class="docs-layout" data-scope="docs" data-content-nav="true" data-content-nav-ready="${contentNav.ready ? 'true' : 'false'}">`,
             '  <div class="ws-container docs-layout__inner">',
-            '    <aside class="docs-sidebar" id="docs-sidebar" data-docs-sidebar hidden>',
+            '    <aside class="docs-sidebar" id="docs-sidebar" data-docs-sidebar>',
             '      <div class="docs-panel__header">',
             '        <a class="docs-panel__link" href="/docs/">Docs</a>',
             '      </div>',
-            '      <nav class="docs-nav" data-docs-nav aria-label="Docs navigation" hidden></nav>',
+            `      <nav class="docs-nav" data-docs-nav aria-label="Docs navigation">${contentNav.navHtml}</nav>`,
             '    </aside>',
             '    <div class="docs-main">',
-            '      <div class="docs-toolbar" data-docs-toolbar hidden>',
-            '        <nav class="docs-breadcrumb" data-docs-breadcrumb aria-label="Breadcrumb" hidden></nav>',
+            '      <div class="docs-toolbar" data-docs-toolbar>',
+            `        <nav class="docs-breadcrumb" data-docs-breadcrumb aria-label="Breadcrumb">${contentNav.breadcrumbHtml}</nav>`,
             '      </div>',
             '      <div class="docs-main__content ws-flow">',
             `        <article class="docs-article ws-markdown" data-docs-article>${bodyHtml}</article>`,
@@ -875,6 +896,145 @@ function mergeContentIntoTemplate(
     main.html(docsLayoutHtml);
 
     return document.root().html() ?? '';
+}
+
+type DocsNavNode = {
+    segment: string;
+    path: string;
+    title: string;
+    children: DocsNavNode[];
+    isPage: boolean;
+    position: number;
+};
+
+function buildContentNavHtml(
+    navEntries: readonly DocsNavEntry[],
+    currentPath: string
+): { navHtml: string; breadcrumbHtml: string; ready: boolean } {
+    if (navEntries.length === 0) {
+        return { navHtml: '', breadcrumbHtml: '', ready: false };
+    }
+
+    const normalizedPath = normalizeDocsPath(currentPath);
+    const tree = buildContentNavTree(navEntries);
+    const titleByPath = new Map<string, string>(
+        navEntries.map((entry) => [normalizeDocsPath(entry.path), entry.title])
+    );
+    titleByPath.set('/docs/', titleByPath.get('/docs/') ?? 'Docs');
+
+    const navHtml = renderContentNavList(tree.children, normalizedPath);
+    const breadcrumbHtml = renderContentBreadcrumb(titleByPath, normalizedPath);
+    return { navHtml, breadcrumbHtml, ready: navHtml.length > 0 };
+}
+
+function normalizeDocsPath(pathname: string): string {
+    if (!pathname.startsWith('/docs')) {
+        return pathname;
+    }
+    if (pathname === '/docs') {
+        return '/docs/';
+    }
+    return pathname.endsWith('/') ? pathname : `${pathname}/`;
+}
+
+function buildContentNavTree(entries: readonly DocsNavEntry[]): DocsNavNode {
+    let position = 0;
+    const root: DocsNavNode = {
+        segment: 'docs',
+        path: '/docs/',
+        title: 'Docs',
+        children: [],
+        isPage: false,
+        position: position++
+    };
+
+    for (const entry of entries) {
+        const normalizedPath = normalizeDocsPath(entry.path);
+        const segments = normalizedPath.split('/').filter(Boolean);
+        if (segments.length === 0) {
+            continue;
+        }
+
+        let current = root;
+        for (let index = 1; index < segments.length; index += 1) {
+            const segment = segments[index];
+            const nodePath = `/${segments.slice(0, index + 1).join('/')}/`;
+            let child = current.children.find((node) => node.segment === segment);
+            if (!child) {
+                child = {
+                    segment,
+                    path: nodePath,
+                    title: toTitleCase(segment.replace(/[-_]/g, ' ')),
+                    children: [],
+                    isPage: false,
+                    position: position++
+                };
+                current.children.push(child);
+            }
+            current = child;
+        }
+
+        current.title = entry.title;
+        current.isPage = true;
+    }
+
+    return root;
+}
+
+function renderContentNavList(nodes: readonly DocsNavNode[], currentPath: string, depth = 0): string {
+    const listClass = depth === 0 ? 'docs-nav__list' : 'docs-nav__list docs-nav__list--nested';
+    const sorted = [...nodes].sort((a, b) => a.position - b.position);
+
+    const items = sorted.map((node) => {
+        const isActive = node.path === currentPath;
+        const isBranch = !isActive && currentPath.startsWith(node.path);
+        const activeAttr = isActive
+            ? ' data-active="true"'
+            : isBranch
+                ? ' data-active-branch="true"'
+                : '';
+
+        const label = node.isPage
+            ? `<a class="docs-nav__link" href="${node.path}"${isActive ? ' aria-current="page"' : ''}>${escapeHtml(node.title)}</a>`
+            : `<span class="docs-nav__label">${escapeHtml(node.title)}</span>`;
+        const nested = node.children.length > 0
+            ? renderContentNavList(node.children, currentPath, depth + 1)
+            : '';
+
+        return `<li class="docs-nav__item"${activeAttr}>${label}${nested}</li>`;
+    });
+
+    return `<ol class="${listClass}">${items.join('')}</ol>`;
+}
+
+function renderContentBreadcrumb(
+    titleByPath: ReadonlyMap<string, string>,
+    currentPath: string
+): string {
+    if (!currentPath.startsWith('/docs/')) {
+        return '';
+    }
+
+    const crumbs: Array<{ title: string; href: string }> = [];
+    const rootTitle = titleByPath.get('/docs/') ?? 'Docs';
+    crumbs.push({ title: rootTitle, href: '/docs/' });
+
+    const segments = currentPath.replace(/^\/docs\/?/, '').split('/').filter(Boolean);
+    let href = '/docs/';
+    for (const segment of segments) {
+        href = `${href}${segment}/`;
+        const title = titleByPath.get(href) ?? toTitleCase(segment.replace(/[-_]/g, ' '));
+        crumbs.push({ title, href });
+    }
+
+    const items = crumbs.map((crumb, index) => {
+        if (index === crumbs.length - 1) {
+            return `<li class="docs-breadcrumb__item"><span aria-current="page">${escapeHtml(crumb.title)}</span></li>`;
+        }
+        return `<li class="docs-breadcrumb__item"><a class="docs-breadcrumb__link" href="${crumb.href}">${escapeHtml(crumb.title)}</a></li>`;
+    });
+
+    return `<ol class="docs-breadcrumb__list">${items.join('')}</ol>`;
 }
 
 function ensureMetaProperty(head: Cheerio<AnyNode>, property: string, content: string): void {
@@ -1195,6 +1355,10 @@ async function rewriteContentForPublish(
         document(selector)
             .attr('src', resolvePageAssetUrl(pagesUrlPrefix, 'docs', docsManifest.js))
             .attr('type', 'module');
+    }
+
+    if (document('[data-scope="docs"]').length > 0) {
+        ensureDocsShellCriticalCss(document);
     }
 
     return document.root().html() ?? html;

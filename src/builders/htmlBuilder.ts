@@ -16,11 +16,13 @@ import { getImageDimensions } from '../assets/imageOptimizer.js';
 import { applyLazyLoading } from '../html/lazyLoad.js';
 import { addSubresourceIntegrity } from '../html/htmlSecurity.js';
 import { injectResourceHints } from '../html/resourceHints.js';
-import { inlineCriticalCss } from '../html/criticalCss.js';
+import { ensureAppShellCriticalCss, ensureDocsShellCriticalCss, inlineCriticalCss } from '../html/criticalCss.js';
 import { findPageFromChangedFile } from '../utils/pathMatch.js';
 import { emitDiagnostic } from '../core/diagnostics.js';
 import type { EnableFlags } from '../types.js';
 import { resolvePageAssetUrl, resolvePageHtmlDir, resolvePagesUrlPrefix } from '../utils/pagePaths.js';
+
+
 
 export function createHtmlBuilder(context: BuilderContext): Builder {
     return {
@@ -269,8 +271,14 @@ async function rewriteForPublish(
 
     removeDevScripts(document);
 
+    const appCssHref = shared?.css ? `/app/${shared.css}` : `/${FOLDERS.app}/app.css`;
     if (shared?.css) {
-        document(`link[href="/app/app.css"]`).attr('href', `/app/${shared.css}`);
+        document(`link[href="/app/app.css"]`).attr('href', appCssHref);
+    }
+    ensureStylesheetPreload(document, appCssHref);
+    ensureAppShellCriticalCss(document, appCssHref);
+    if (document('[data-scope="docs"]').length > 0) {
+        ensureDocsShellCriticalCss(document);
     }
     if (shared?.js) {
         document(`script[src="/app/app.js"]`)
@@ -378,6 +386,29 @@ function validatePageFragment(html: string, filePath: string): void {
 
 function warn(message: string): void {
     console.warn(`[webstir-frontend][html] ${message}`);
+}
+
+function ensureStylesheetPreload(document: CheerioAPI, href: string): void {
+    const head = document('head').first();
+    if (head.length === 0) {
+        return;
+    }
+
+    const existingPreload = document(`link[rel="preload"][href="${href}"]`).first();
+    if (existingPreload.length > 0) {
+        return;
+    }
+
+    const stylesheet = document(`link[rel="stylesheet"][href="${href}"]`).first();
+    if (stylesheet.length > 0) {
+        stylesheet.attr('fetchpriority', 'high');
+    }
+    const preloadTag = `<link rel="preload" as="style" href="${href}">`;
+    if (stylesheet.length > 0) {
+        stylesheet.before(preloadTag);
+    } else {
+        head.append(preloadTag);
+    }
 }
 
 function dedupeHeadMeta(document: CheerioAPI, attribute: 'name' | 'property'): void {
