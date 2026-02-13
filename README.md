@@ -9,23 +9,11 @@ Frontend build and publish toolkit for Webstir workspaces. The package bundles t
 
 ## Quick Start
 
-1. **Authenticate to GitHub Packages**
-   Configure user-level auth (recommended) or set an env var:
-   - User config (`~/.npmrc`):
-     ```ini
-     @webstir-io:registry=https://npm.pkg.github.com
-     //npm.pkg.github.com/:_authToken=${GH_PACKAGES_TOKEN}
-     ```
-   - Or export a token (CI uses `NODE_AUTH_TOKEN`):
-     ```bash
-     export NODE_AUTH_TOKEN="$GH_PACKAGES_TOKEN"
-     ```
-   Use a token with `read:packages` for consumers and `write:packages` for publishers.
-2. **Install the package**
+1. **Install the package**
    ```bash
    npm install @webstir-io/webstir-frontend
    ```
-3. **Run a build**
+2. **Run a build**
    ```bash
    npx webstir-frontend build --workspace /absolute/path/to/workspace
    ```
@@ -143,14 +131,14 @@ npm run smoke          # scaffolds a temp workspace and runs build/publish
 npm run release -- patch
 ```
 
-GitHub Actions should run `npm ci`, `npm run clean`, `npm run build`, `npm run test`, and `npm run smoke` before publishing. The package publishes to GitHub Packages per `publishConfig`.
+GitHub Actions should run `npm ci`, `npm run clean`, `npm run build`, `npm run test`, and `npm run smoke` before publishing. The release workflow publishes to npm with trusted publishing (`id-token: write` + provenance).
 
 CI notes
 - Package CI runs clean + build + tests + smoke on PRs and main.
 
 ## Troubleshooting
 
-- **“Authentication required for npm.pkg.github.com”** — ensure the configured token has `read:packages`.
+- **“404 Not Found” when installing `@webstir-io/module-contract`** — verify the dependency has been published to npm and re-generate `package-lock.json` against npmjs.
 - **“No frontend test files found”** — the `test` script expects files under `tests/**/*.test.js` after build.
 - **Missing entry points in manifest** — confirm `build/frontend` contains at least one `.js`/`.mjs` bundle; the provider falls back to `build/app/index.js` and emits a warning if empty.
 
