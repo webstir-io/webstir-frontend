@@ -1,5 +1,12 @@
 # @webstir-io/webstir-frontend
 
+> This repository is legacy and no longer the source of truth.
+> Active development has moved to the canonical Webstir monorepo:
+> [webstir-io/webstir](https://github.com/webstir-io/webstir)
+>
+> Package source location in the monorepo:
+> `packages/tooling/webstir-frontend`
+
 Frontend build and publish toolkit for Webstir workspaces. The package bundles the HTML/CSS/JS pipeline, scaffolding helpers, and module provider used by the Webstir CLI and installers.
 
 ## Status
